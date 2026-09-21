@@ -1,8 +1,52 @@
 (function(){
 'use strict';
 const SEED = window.SEED;
-const NBOX = 6, NSLOT = 8, MAXBOX = 27;
+const MAXBOX = 27;
 const $app = document.getElementById('app');
+
+/* ---------- match formats (league + cups) ---------- */
+const FORMATS = {
+  league: {
+    id:'league', name:'League / friendly', short:'Friendly',
+    slots:8, rubs:6, scoring:'pins', pairRubs:true, maxScore:null,
+    summary:'8 players a side, 6 rubs. Team pin totals (South Molton league style).'
+  },
+  'western-counties': {
+    id:'western-counties', name:'Western Counties', short:'Western Counties',
+    slots:8, rubs:6, scoring:'mfm-rub', pairRubs:false, maxScore:48,
+    summary:'8 players a side. Man for Man: each rub against the opposite number across 6 rubs. Maximum team score 48.'
+  },
+  'sid-squire': {
+    id:'sid-squire', name:'Sid Squire', short:'Sid Squire',
+    slots:5, rubs:8, scoring:'pins', pairRubs:false, maxScore:null,
+    summary:'5 players a side, 8 rubs. Team pin totals.'
+  },
+  pidler: {
+    id:'pidler', name:'Pidler', short:'Pidler',
+    slots:8, rubs:6, scoring:'pins', pairRubs:false, maxScore:null,
+    summary:'8 players a side, 6 rubs. Team pin totals.'
+  },
+  'front-pin': {
+    id:'front-pin', name:'Front Pin', short:'Front Pin',
+    slots:6, rubs:6, scoring:'pins', pairRubs:false, maxScore:null,
+    summary:'6 players a side, 6 rubs. Team pin totals.'
+  },
+  concrete: {
+    id:'concrete', name:'Concrete', short:'Concrete',
+    slots:7, rubs:6, scoring:'mfm-total', pairRubs:false, maxScore:7,
+    summary:'7 players a side. Man for Man on highest total vs opposite number — best out of 7 for each team.'
+  }
+};
+const FORMAT_ORDER = ['league','western-counties','sid-squire','pidler','front-pin','concrete'];
+function cardFormat(c){
+  if(c && c.format && FORMATS[c.format]) return FORMATS[c.format];
+  return FORMATS.league;
+}
+function formatUsesPairRubs(c){
+  const fmt=cardFormat(c);
+  if(fmt.id==='league') return settings.rubs===2;
+  return !!fmt.pairRubs;
+}
 
 /* ---------- storage: IndexedDB on the phone (cards, photos, settings) ---------- */
 const DBNAME='skittles-scorer';
@@ -36,7 +80,7 @@ let extra    = {};        // players added on the phone
 const photoURLs = {};     // object URLs for the stored chalkboard photos
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
-             qmSide:'home', qmOpp:'', qmMsg:'' };
+             qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league' };
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -122,11 +166,15 @@ function quickMatchesFor(d,n){
 }
 
 /* ---------- card model ---------- */
-const blankSide = () => Array.from({length:NSLOT},()=>({name:'',boxes:Array(NBOX).fill(null),spare:Array(NBOX).fill(false),fine:Array(NBOX).fill(false)}));
+function blankSide(fmt){
+  fmt=fmt||FORMATS.league;
+  return Array.from({length:fmt.slots},()=>({name:'',boxes:Array(fmt.rubs).fill(null),spare:Array(fmt.rubs).fill(false),fine:Array(fmt.rubs).fill(false)}));
+}
 function ensureCard(f){
   if(!cards[f.key]){
-    cards[f.key]={key:f.key,div:f.div,week:f.week,mi:f.mi,date:f.date,home:f.home,away:f.away,
-      players:{home:blankSide(),away:blankSide()},hasPhoto:false,status:'draft',savedAt:null,submittedAt:null,by:null};
+    const fmt=FORMATS[f.format]||FORMATS.league;
+    cards[f.key]={key:f.key,div:f.div,week:f.week,mi:f.mi,date:f.date,home:f.home,away:f.away,format:fmt.id,
+      players:{home:blankSide(fmt),away:blankSide(fmt)},hasPhoto:false,status:'draft',savedAt:null,submittedAt:null,by:null};
     if(f.quick){ cards[f.key].quick=true; cards[f.key].homeDiv=f.homeDiv; cards[f.key].awayDiv=f.awayDiv; }
     persist(f.key);
   }
@@ -149,12 +197,13 @@ function startQuickMatch(){
   if(!session){ ui.qmMsg='Log in as a team first.'; render(); return; }
   if(ui.qmSide!=='home' && ui.qmSide!=='away'){ ui.qmMsg='Choose whether you are home or away.'; render(); return; }
   if(!ui.qmOpp){ ui.qmMsg='Choose the opposing team.'; render(); return; }
+  const fmt=FORMATS[ui.qmFormat]||FORMATS.league;
   const me={div:session.div,num:session.num};
   const opp=parseTeamKey(ui.qmOpp);
   if(teamKey(opp.div,opp.num)===teamKey(me.div,me.num)){ ui.qmMsg='Pick a different team as the opposition.'; render(); return; }
   const home=ui.qmSide==='home'?me:opp, away=ui.qmSide==='home'?opp:me;
   const key='qm-'+Date.now();
-  ensureCard({key,div:home.div,week:0,mi:0,date:todayISO(),home:home.num,away:away.num,quick:true,homeDiv:home.div,awayDiv:away.div});
+  ensureCard({key,div:home.div,week:0,mi:0,date:todayISO(),home:home.num,away:away.num,quick:true,homeDiv:home.div,awayDiv:away.div,format:fmt.id});
   ui.qmMsg=''; openCard(key);
 }
 function persist(key){
@@ -166,26 +215,76 @@ function persist(key){
 const curCard = () => cards[ui.cardKey];
 
 /* ---------- maths ---------- */
-const groups = () => settings.rubs===2 ? [[0,1],[2,3],[4,5]] : [[0],[1],[2],[3],[4],[5]];
+function groupsFor(c){
+  const fmt=cardFormat(c), n=fmt.rubs;
+  if(formatUsesPairRubs(c) && n===6) return [[0,1],[2,3],[4,5]];
+  return Array.from({length:n},(_,i)=>[i]);
+}
 const isSpare = (p,b) => { const v=p.boxes[b]; return v!==null && (v>9 || (v===9 && p.spare[b])); };
 const pinsOf = p => p.boxes.reduce((s,v)=>s+(v||0),0);
-const colTotals = list => Array.from({length:NBOX},(_,c)=>list.reduce((s,p)=>s+(p.boxes[c]||0),0));
-const pinsUp = list => { const ct=colTotals(list); return groups().map(g=>g.reduce((s,c)=>s+ct[c],0)); };
-const teamTotal = list => list.reduce((s,p)=>s+pinsOf(p),0);
-function entryOrder(){
-  // home always starts. A team plays its rub(s) through all eight players, then play passes to the other team
-  const out=[];
-  groups().forEach(g=>['home','away'].forEach(side=>{ for(let slot=0;slot<NSLOT;slot++) g.forEach(c=>out.push({side,slot,box:c})); }));
+function colTotals(c,list){
+  const n=cardFormat(c).rubs;
+  return Array.from({length:n},(_,col)=>list.reduce((s,p)=>s+(p.boxes[col]||0),0));
+}
+function pinsUp(c,list){
+  const ct=colTotals(c,list);
+  return groupsFor(c).map(g=>g.reduce((s,col)=>s+ct[col],0));
+}
+const teamPins = list => list.reduce((s,p)=>s+pinsOf(p),0);
+function mfmRubPoints(c){
+  const fmt=cardFormat(c); let h=0,a=0;
+  for(let slot=0;slot<fmt.slots;slot++){
+    const hp=c.players.home[slot], ap=c.players.away[slot];
+    for(let box=0;box<fmt.rubs;box++){
+      const hv=hp.boxes[box], av=ap.boxes[box];
+      if(hv===null||av===null) continue;
+      if(hv>av) h++; else if(av>hv) a++;
+    }
+  }
+  return {home:h,away:a};
+}
+function mfmTotalPoints(c){
+  const fmt=cardFormat(c); let h=0,a=0;
+  for(let slot=0;slot<fmt.slots;slot++){
+    const hp=c.players.home[slot], ap=c.players.away[slot];
+    if(hp.boxes.every(v=>v===null) && ap.boxes.every(v=>v===null)) continue;
+    const ht=pinsOf(hp), at=pinsOf(ap);
+    if(ht>at) h++; else if(at>ht) a++;
+  }
+  return {home:h,away:a};
+}
+function matchScore(c){
+  const fmt=cardFormat(c);
+  const pins={home:teamPins(c.players.home),away:teamPins(c.players.away)};
+  if(fmt.scoring==='mfm-rub'){
+    const pts=mfmRubPoints(c);
+    return {home:pts.home, away:pts.away, pins, mode:'mfm-rub', unit:'pts', max:fmt.maxScore,
+      caption:'Man for Man (each rub)'};
+  }
+  if(fmt.scoring==='mfm-total'){
+    const pts=mfmTotalPoints(c);
+    return {home:pts.home, away:pts.away, pins, mode:'mfm-total', unit:'pts', max:fmt.maxScore,
+      caption:'Man for Man (player totals)'};
+  }
+  return {home:pins.home, away:pins.away, pins, mode:'pins', unit:'pins', max:null, caption:'Pin total'};
+}
+function entryOrder(c){
+  // home always starts. A team plays its rub(s) through all players, then play passes to the other team
+  const fmt=cardFormat(c), out=[];
+  groupsFor(c).forEach(g=>['home','away'].forEach(side=>{
+    for(let slot=0;slot<fmt.slots;slot++) g.forEach(box=>out.push({side,slot,box}));
+  }));
   return out;
 }
 function startSide(c){
-  const o=entryOrder().find(x=>{ const p=c.players[x.side][x.slot]; return p.name && p.boxes[x.box]===null; });
+  const o=entryOrder(c).find(x=>{ const p=c.players[x.side][x.slot]; return p.name && p.boxes[x.box]===null; });
   return o?o.side:'home';
 }
 
 /* ---------- checks before submitting ---------- */
 function checkCard(c){
   const blockers=[], warnings=[], lines=[];
+  const fmt=cardFormat(c);
   ['home','away'].forEach(side=>{
     const list=c.players[side], nm=sideName(c,side);
     const named=list.filter(p=>p.name);
@@ -195,8 +294,8 @@ function checkCard(c){
     if(orphan){ blockers.push(nm+': scores entered for a slot with no player'); lines.push({t:nm+': a score has no player name',s:'no'}); }
     if(empty){ blockers.push(nm+': '+empty+' box'+(empty>1?'es':'')+' still empty'); lines.push({t:nm+': '+empty+' box'+(empty>1?'es':'')+' still empty',s:'no'}); }
     else if(!orphan){
-      if(named.length<NSLOT) lines.push({t:nm+': '+named.length+' players, all boxes filled',s:'warn'});
-      else lines.push({t:nm+': 8 players, all boxes filled',s:'ok'});
+      if(named.length<fmt.slots) lines.push({t:nm+': '+named.length+' players, all boxes filled',s:'warn'});
+      else lines.push({t:nm+': '+fmt.slots+' players, all boxes filled',s:'ok'});
     }
   });
   if(!c.hasPhoto){ blockers.push('Chalkboard photo needed'); lines.push({t:'Photo of the chalkboard needed',s:'no'}); }
@@ -205,10 +304,11 @@ function checkCard(c){
 }
 function exportJSON(c){
   const mk=side=>c.players[side].filter(p=>p.name).map(p=>({name:p.name,pins:pinsOf(p),boxes:p.boxes.slice(),spares:p.boxes.map((v,i)=>isSpare(p,i)?i+1:0).filter(Boolean)}));
-  const home=sideMeta(c,'home'), away=sideMeta(c,'away');
-  return {key:c.quick?'quick-'+c.key:'w'+c.week+'m'+c.mi,quick:!!c.quick,division:c.quick?null:c.div+1,
-    homeDivision:home.div+1,awayDivision:away.div+1,homeNum:home.num,awayNum:away.num,
-    homeTotal:teamTotal(c.players.home),awayTotal:teamTotal(c.players.away),
+  const home=sideMeta(c,'home'), away=sideMeta(c,'away'), fmt=cardFormat(c), sc=matchScore(c);
+  return {key:c.quick?'quick-'+c.key:'w'+c.week+'m'+c.mi,quick:!!c.quick,format:fmt.id,formatName:fmt.name,scoring:fmt.scoring,
+    division:c.quick?null:c.div+1, homeDivision:home.div+1,awayDivision:away.div+1,homeNum:home.num,awayNum:away.num,
+    homeScore:sc.home,awayScore:sc.away,homePins:sc.pins.home,awayPins:sc.pins.away,
+    homeTotal:sc.home,awayTotal:sc.away,
     savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,homePlayers:mk('home'),awayPlayers:mk('away')};
 }
 
@@ -224,16 +324,19 @@ function matchPdfFileName(c){
 }
 function matchPdfLines(c){
   const hn=sideName(c,'home'), an=sideName(c,'away');
-  const th=teamTotal(c.players.home), ta=teamTotal(c.players.away);
+  const sc=matchScore(c), fmt=cardFormat(c);
   const home=sideMeta(c,'home');
   const lines=[];
   lines.push({t:'South Molton Skittles Scorer', bold:true, size:16});
-  lines.push({t:c.quick?'Quick Match result':'League match result', size:11, gap:4});
+  lines.push({t:c.quick?(fmt.id==='league'?'Quick Match result':fmt.name+' cup result'):'League match result', size:11, gap:4});
   lines.push({t:hn+'  v  '+an, bold:true, size:14, gap:8});
-  lines.push({t:(c.quick?'Quick Match':'Week '+c.week)+' · '+fmtDate(c.date)});
+  lines.push({t:(c.quick?(fmt.id==='league'?'Quick Match':fmt.name+' cup'):'Week '+c.week)+' · '+fmtDate(c.date)});
+  lines.push({t:fmt.summary, size:9, gap:4});
   const ven=venueOf(home.div,home.num); if(ven) lines.push({t:ven});
-  lines.push({t:'Final score  '+th+' – '+ta, bold:true, size:13, gap:10});
-  if(th!==ta) lines.push({t:(th>ta?hn:an)+' win by '+Math.abs(th-ta), gap:6});
+  const unit=sc.mode==='pins'?'':' pts';
+  lines.push({t:'Final score  '+sc.home+' – '+sc.away+unit+(sc.max?' (max '+sc.max+')':''), bold:true, size:13, gap:4});
+  if(sc.mode!=='pins') lines.push({t:'Pins  '+sc.pins.home+' – '+sc.pins.away+' · '+sc.caption, size:10, gap:6});
+  if(sc.home!==sc.away) lines.push({t:(sc.home>sc.away?hn:an)+' win by '+Math.abs(sc.home-sc.away)+(sc.mode==='pins'?'':' pts'), gap:6});
   else lines.push({t:'Match drawn', gap:6});
   if(c.status==='submitted' && c.submittedAt){
     lines.push({t:'Submitted '+new Date(c.submittedAt).toLocaleString('en-GB')+(c.by?' by '+c.by:''), size:10, gap:10});
@@ -241,24 +344,29 @@ function matchPdfLines(c){
     lines.push({t:'Draft card · saved on this phone'+(c.savedAt?' · '+c.savedAt:''), size:10, gap:10});
   }
   ['home','away'].forEach(side=>{
-    const list=c.players[side], tot=teamTotal(list), nm=sideName(c,side);
-    const ct=colTotals(list), ups=pinsUp(list);
-    lines.push({t:(side==='home'?'HOME':'AWAY')+' · '+nm+' · '+tot, bold:true, size:12, gap:8});
-    lines.push({t:'Player          B1  B2  B3  B4  B5  B6   Tot', size:9, gap:2});
-    // keep card batting order (slot order) — do not sort by name or pins
+    const list=c.players[side], tot=teamPins(list), nm=sideName(c,side);
+    const ct=colTotals(c,list), ups=pinsUp(c,list);
+    lines.push({t:(side==='home'?'HOME':'AWAY')+' · '+nm+' · pins '+tot, bold:true, size:12, gap:8});
+    const hdr='Player          '+Array.from({length:fmt.rubs},(_,i)=>('  B'+(i+1)).slice(-3)).join(' ')+'   Tot';
+    lines.push({t:hdr, size:9, gap:2});
     list.forEach(p=>{
       const label=playerLabel(p);
       const boxes=p.boxes.map(v=>v===null?'-':String(v)).map(x=>('   '+x).slice(-3)).join(' ');
       const name=(pdfSafe(label)+'                ').slice(0,14);
       lines.push({t:name+' '+boxes+'  '+(p.name?('   '+pinsOf(p)).slice(-3):'  -'), size:10, mono:true});
     });
-    if(settings.rubs===2){
+    if(formatUsesPairRubs(c)){
       lines.push({t:'Rub Score: '+ups.join(' · '), size:10, gap:2});
       lines.push({t:'Each rub: '+ct.join(' · '), size:10, gap:10});
     } else {
       lines.push({t:'Rub Score: '+ups.join(' · '), size:10, gap:10});
     }
   });
+  if(fmt.scoring==='mfm-rub'){
+    lines.push({t:'Man for Man (each rub vs opposite number): '+sc.home+' – '+sc.away+' (max '+fmt.maxScore+')', bold:true, size:10, gap:6});
+  } else if(fmt.scoring==='mfm-total'){
+    lines.push({t:'Man for Man (highest total vs opposite number): '+sc.home+' – '+sc.away+' (best of '+fmt.maxScore+')', bold:true, size:10, gap:6});
+  }
   lines.push({t:'Generated by Skittles Scorer on this phone.', size:9, gap:8});
   return lines;
 }
@@ -355,7 +463,8 @@ function downloadMatchPdf(c){
   }
 }
 function pdfActionsHtml(c){
-  const ready=c.status==='submitted' || (teamTotal(c.players.home)+teamTotal(c.players.away)>0 && !checkCard(c).blockers.length);
+  const sc=matchScore(c);
+  const ready=c.status==='submitted' || (sc.pins.home+sc.pins.away>0 && !checkCard(c).blockers.length);
   if(!ready) return '';
   const label=c.status==='submitted'?'Share result PDF':'Share PDF of this result';
   return `<div class="pdf-actions">
@@ -416,19 +525,20 @@ function fixturesView(){
     <div><h2 style="margin:0">${esc(teamName(d,n))}</h2><span class="muted small">Division ${d+1}</span></div>
     <button class="back" data-a="logout">Log out</button></div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
-  h+=`<div class="card"><b>Quick Match</b>
-    <p class="muted small" style="margin:6px 0 12px">Score as your team against any opponent — no league fixture needed. Useful for friendlies, rearrangements, or practice.</p>
-    <button class="btn block" data-a="quick">Set up a Quick Match</button></div>`;
+  h+=`<div class="card"><b>Quick Match / Cup</b>
+    <p class="muted small" style="margin:6px 0 12px">Score as your team against any opponent — league-style friendly or a cup format (Western Counties, Sid Squire, Pidler, Front Pin, Concrete).</p>
+    <button class="btn block" data-a="quick">Set up a Quick Match or Cup</button></div>`;
   if(qms.length){
-    h+=`<div class="card"><b>Your Quick Matches</b>`;
+    h+=`<div class="card"><b>Your Quick Matches & Cups</b>`;
     qms.forEach(c=>{
-      const home=sideName(c,'home'), away=sideName(c,'away');
+      const home=sideName(c,'home'), away=sideName(c,'away'), fmt=cardFormat(c);
+      const kind=fmt.id==='league'?'Quick Match':fmt.short+' cup';
       let st='<span class="muted">Not started</span>';
       if(c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
       else if(c.players.home.some(p=>p.name||p.boxes.some(v=>v!==null))||c.players.away.some(p=>p.name||p.boxes.some(v=>v!==null))) st='<span class="state-wait">In progress</span>';
       h+=`<div class="qm-row">
-        <button class="frow qm-open" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · Quick Match<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>
-        <button class="qm-del" data-a="delete-quick" data-key="${esc(c.key)}" aria-label="Delete Quick Match ${esc(home)} versus ${esc(away)}">Delete</button>
+        <button class="frow qm-open" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · ${esc(kind)}<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>
+        <button class="qm-del" data-a="delete-quick" data-key="${esc(c.key)}" aria-label="Delete ${esc(kind)} ${esc(home)} versus ${esc(away)}">Delete</button>
       </div>`;
     });
     h+='</div>';
@@ -462,11 +572,21 @@ function quickView(){
   const meName=teamName(session.div,session.num);
   const meKey=teamKey(session.div,session.num);
   const side=ui.qmSide==='away'?'away':'home';
+  const fmtId=FORMATS[ui.qmFormat]?ui.qmFormat:'league';
+  const fmt=FORMATS[fmtId];
+  const fmtOpts=FORMAT_ORDER.map(id=>{
+    const f=FORMATS[id];
+    const cup=id==='league'?'':' · Cup';
+    return `<option value="${id}" ${fmtId===id?'selected':''}>${esc(f.name)}${cup}</option>`;
+  }).join('');
   return `<div class="wrap">
     <button class="back" data-a="back">‹ Fixtures</button>
-    <h2 style="margin-top:16px">Quick Match</h2>
-    <p class="muted">You are scoring as <b>${esc(meName)}</b>. Choose home or away for your team, then pick the opposition.</p>
-    <p class="field" style="margin-bottom:8px">Your side</p>
+    <h2 style="margin-top:16px">Quick Match / Cup</h2>
+    <p class="muted">You are scoring as <b>${esc(meName)}</b>. Pick the format, home or away, then the opposition.</p>
+    <label class="field" for="qmFormat">Match format</label>
+    <select id="qmFormat">${fmtOpts}</select>
+    <p class="muted small" style="margin:8px 0 0">${esc(fmt.summary)}</p>
+    <p class="field" style="margin-bottom:8px;margin-top:16px">Your side</p>
     <div class="tabs" style="margin-bottom:16px">
       <button class="${side==='home'?'on':''}" data-a="qm-side" data-side="home">We are home</button>
       <button class="${side==='away'?'on':''}" data-a="qm-side" data-side="away">We are away</button>
@@ -481,14 +601,16 @@ function quickView(){
 function boxHTML(c,side,slot,box,locked){
   const p=c.players[side][slot], v=p.boxes[box];
   const sel=ui.sel&&ui.sel.side===side&&ui.sel.slot===slot&&ui.sel.box===box;
-  const cls=['box', settings.rubs===2&&box%2===0&&box>0?'gs':'', sel?'sel':'', isSpare(p,box)?'spare':'', settings.fines&&p.fine[box]?'fine':''].join(' ');
+  const pair=formatUsesPairRubs(c);
+  const cls=['box', pair&&box%2===0&&box>0?'gs':'', sel?'sel':'', isSpare(p,box)?'spare':'', settings.fines&&p.fine[box]?'fine':''].join(' ');
   return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}">${v===null?'':v}</button>`;
 }
 function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
-  const list=c.players[side], meta=sideMeta(c,side), locked=c.status==='submitted';
-  const ct=colTotals(list), ups=pinsUp(list), tot=teamTotal(list);
+  const list=c.players[side], meta=sideMeta(c,side), locked=c.status==='submitted', fmt=cardFormat(c);
+  const ct=colTotals(c,list), ups=pinsUp(c,list), tot=teamPins(list);
   const last=(SEED.lineups[teamKey(meta.div,meta.num)]||[]);
+  const grid=`grid-template-columns:repeat(${fmt.rubs},minmax(0,1fr))`;
   let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">${side==='home'?'Home':'Away'}</span><span class="tname">${esc(sideName(c,side))}</span></div>`;
   if(!locked && list.every(p=>!p.name) && last.length) h+=`<button class="btn chalk" data-a="lineup" data-side="${side}">Use last match's line-up</button>`;
   if(!locked && list.filter(p=>p.name).length>1) h+=`<button class="btn chalk" data-a="reorder" data-side="${side}">Change the batting order</button>`;
@@ -496,37 +618,45 @@ function boardView(c,side){
     const nameBtn=p.name
       ? `<button class="pname" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${esc(initials(p.name))}<span class="full">${esc(p.name)}</span></button>`
       : `<button class="pname empty" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${MISSING_PLAYER}</button>`;
-    h+=`<div class="prow"><div class="phead">${nameBtn}<div class="ptot">${p.boxes.some(v=>v!==null)?pinsOf(p):''}</div></div><div class="boxes">`+
-       Array.from({length:NBOX},(_,b)=>boxHTML(c,side,slot,b,locked)).join('')+`</div></div>`;
+    h+=`<div class="prow"><div class="phead">${nameBtn}<div class="ptot">${p.boxes.some(v=>v!==null)?pinsOf(p):''}</div></div><div class="boxes${fmt.rubs>6?' many':''}" style="${grid}">`+
+       Array.from({length:fmt.rubs},(_,b)=>boxHTML(c,side,slot,b,locked)).join('')+`</div></div>`;
   });
   h+=`<div class="bfoot">`;
-  if(settings.rubs===2){
-    h+=`<div class="lbl">Rub Score</div><div class="upsrow">${ups.map(x=>`<span>${x||''}</span>`).join('')}</div>
-        <div class="lbl">Each rub</div><div class="colrow">${ct.map(x=>`<span>${x||''}</span>`).join('')}</div>`;
+  if(formatUsesPairRubs(c)){
+    h+=`<div class="lbl">Rub Score</div><div class="upsrow" style="${grid}">${ups.map(x=>`<span>${x||''}</span>`).join('')}</div>
+        <div class="lbl">Each rub</div><div class="colrow" style="${grid}">${ct.map(x=>`<span>${x||''}</span>`).join('')}</div>`;
   } else {
-    h+=`<div class="lbl">Rub Score</div><div class="upsrow">${ups.map(x=>`<span class="one">${x||''}</span>`).join('')}</div>`;
+    h+=`<div class="lbl">Rub Score</div><div class="upsrow" style="${grid}">${ups.map(x=>`<span class="one">${x||''}</span>`).join('')}</div>`;
   }
-  h+=`<div class="bigtotal"><small>Total</small><b>${tot}</b></div></div></section>`;
+  h+=`<div class="bigtotal"><small>Pins</small><b>${tot}</b></div></div></section>`;
   return h;
 }
 function cardView(){
   const c=curCard(); if(!c) return '';
-  const th=teamTotal(c.players.home), ta=teamTotal(c.players.away);
+  const sc=matchScore(c), fmt=cardFormat(c);
+  const th=sc.home, ta=sc.away;
   const hn=sideName(c,'home'), an=sideName(c,'away');
   const home=sideMeta(c,'home');
-  const msg = (th+ta===0) ? 'No scores yet' : th===ta ? 'All square' : (th>ta?hn:an)+' lead by '+Math.abs(th-ta);
+  let msg;
+  if(th+ta===0 && sc.pins.home+sc.pins.away===0) msg='No scores yet';
+  else if(th===ta) msg='All square';
+  else msg=(th>ta?hn:an)+' lead by '+Math.abs(th-ta)+(sc.mode==='pins'?'':' pts');
+  if(sc.mode!=='pins' && (sc.pins.home||sc.pins.away)) msg+=' · pins '+sc.pins.home+'–'+sc.pins.away;
   const locked=c.status==='submitted';
   const chk=checkCard(c);
-  const title=c.quick ? `Quick Match · ${fmtDate(c.date)}` : `Week ${c.week} · ${fmtDate(c.date)}`;
+  const title=c.quick
+    ? (fmt.id==='league' ? `Quick Match · ${fmtDate(c.date)}` : `${fmt.name} cup · ${fmtDate(c.date)}`)
+    : `Week ${c.week} · ${fmtDate(c.date)}`;
   let h=`<div class="wrap wide">
     <div class="cardhead"><button class="back" data-a="back">‹ Fixtures</button>
-      <div><b>${title}</b><br><span class="muted small">${esc(venueOf(home.div,home.num)||'Venue not set')}</span></div>
+      <div><b>${title}</b><br><span class="muted small">${esc(fmt.summary)}</span><br><span class="muted small">${esc(venueOf(home.div,home.num)||'Venue not set')}</span></div>
       <div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. It will be sent to the league when there is signal. Tap "Change the card" below if something needs correcting.</div>`;
   h+=`<div class="strip" aria-live="polite"><div class="row">
       <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
-      <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div><div class="msg">${esc(msg)}</div></div>
+      <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
+      <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}</div></div>
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
     <section class="card finish"><h2>Finish the match</h2>
@@ -572,8 +702,8 @@ function movePlayer(side,from,to){
   const [p]=list.splice(from,1); list.splice(to,0,p);   // everyone in between shifts by one; scores travel with the player
   ui.resume=null; persist(c.key);
 }
-function rubLabel(box){
-  const g=groups().find(x=>x.includes(box)), n=g.map(x=>x+1).join(' & ');
+function rubLabel(c,box){
+  const g=groupsFor(c).find(x=>x.includes(box)), n=g.map(x=>x+1).join(' & ');
   return (g.length>1?'Rubs ':'Rub ')+n;
 }
 function padSheet(){
@@ -581,7 +711,7 @@ function padSheet(){
   const keys=['9','8','7','6','5','4','3','2','1'].map(k=>`<button data-a="k" data-k="${k}">${k}</button>`).join('')+
     `<button data-a="kback" aria-label="Delete">⌫</button><button data-a="k" data-k="0">0</button><button data-a="closepad" style="font-size:20px">Done</button>`;
   return `<div class="sheet" role="dialog" aria-label="Enter score">
-    <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(sideName(c,s.side))} · ${rubLabel(s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
+    <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(sideName(c,s.side))} · ${rubLabel(c,s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
     <div class="keys">${keys}</div>
     <div class="navrow"><button data-a="prev" aria-label="Previous box">‹ Back</button>
       ${v===9 ? `<button class="${p.spare[s.box]?'on':''}" data-a="spare" aria-pressed="${!!p.spare[s.box]}">Spare ⬡</button>`
@@ -641,11 +771,10 @@ function setVal(v){
   const c=curCard(), s=ui.sel; const p=c.players[s.side][s.slot]; p.boxes[s.box]=v; if(v!==9) p.spare[s.box]=false; persist(c.key); render();
 }
 function move(dir){
-  const order=entryOrder(), s=ui.sel;
+  const c=curCard(), order=entryOrder(c), s=ui.sel;
   const i=order.findIndex(o=>o.side===s.side&&o.slot===s.slot&&o.box===s.box);
   const n=order[i+dir];
   if(!n){ ui.sel=null; render(); return; }
-  const c=curCard();
   ui.side=n.side;   // play has passed to the other team: show their board
   // if the next player has no name yet, ask for one
   if(!c.players[n.side][n.slot].name){ ui.sel=null; ui.sheet={side:n.side,slot:n.slot}; ui.resume=n; render(); return; }
@@ -699,8 +828,8 @@ document.addEventListener('click',e=>{
     case 'fines': settings.fines=!settings.fines; kvSave('settings',settings); render(); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
-    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; render(); break;
-    case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.screen='quick'; render(); window.scrollTo(0,0); break;
+    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; render(); break;
+    case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
     case 'qm-side': ui.qmSide=D.side==='away'?'away':'home'; ui.qmMsg=''; render(); break;
     case 'quick-start': startQuickMatch(); break;
     case 'open-quick': openCard(D.key); break;
@@ -752,7 +881,8 @@ document.addEventListener('click',e=>{
       addPlayer(t); break; }
     case 'forceadd': addPlayer(ui.newName); break;
     case 'lineup': {
-      const c=curCard(), meta=sideMeta(c,D.side), names=(SEED.lineups[teamKey(meta.div,meta.num)]||[]).slice(0,NSLOT);
+      const c=curCard(), meta=sideMeta(c,D.side), fmt=cardFormat(c);
+      const names=(SEED.lineups[teamKey(meta.div,meta.num)]||[]).slice(0,fmt.slots);
       names.forEach((n,i)=>{ c.players[D.side][i].name=n; }); persist(c.key); render(); break; }
     case 'submit': { const c=curCard(); if(checkCard(c).blockers.length) break;
       c.status='submitted'; c.submittedAt=new Date().toISOString(); c.by=teamName(session.div,session.num); persist(c.key); ui.sel=null; render(); window.scrollTo(0,0); break; }
@@ -764,6 +894,7 @@ document.addEventListener('click',e=>{
 document.addEventListener('change',e=>{
   if(e.target.id==='teamSel'){ ui.teamSel=e.target.value; ui.pinMsg=''; }
   if(e.target.id==='qmOpp'){ ui.qmOpp=e.target.value; ui.qmMsg=''; }
+  if(e.target.id==='qmFormat'){ ui.qmFormat=e.target.value; ui.qmMsg=''; render(); }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
     compressBlob(e.target.files[0])

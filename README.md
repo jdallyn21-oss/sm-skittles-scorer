@@ -31,11 +31,18 @@ Each team has its own 4-digit PIN (from the league team-logins list). On the log
 
 Login short names (for example `COLT`, `FARM`) are stored in seed data with each PIN for reference; the UI uses the team dropdown + PIN.
 
-## Quick Match
+## Quick Match / Cup
 
-After login, **Quick Match** on the fixtures screen lets you score as your logged-in team against any opponent (any division) without a seed fixture. Choose whether you are home or away, then pick the opposing team. Cards stay on the phone and show under “Your Quick Matches”. Each listing has a **Delete** control to remove that Quick Match (and its photo) from the phone.
+After login, **Quick Match / Cup** lets you score as your logged-in team against any opponent. Choose a **match format** first:
 
-Empty lineup slots show as **Player Missing** on the board, reorder UI, and result PDF.
+- **League / friendly** — 8 players, 6 rubs, pin totals (existing Quick Match behaviour)
+- **Western Counties** — 8 players, 6 rubs, Man for Man per rub (max 48)
+- **Sid Squire** — 5 players, 8 rubs, pin totals
+- **Pidler** — 8 players, 6 rubs, pin totals
+- **Front Pin** — 6 players, 6 rubs, pin totals
+- **Concrete** — 7 players, Man for Man on player totals (best of 7)
+
+Then choose home or away and the opposing team. Cards list under **Your Quick Matches & Cups** with **Delete**. Empty slots show **Player Missing**.
 
 ## Share result PDF
 
