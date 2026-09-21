@@ -31,6 +31,10 @@ Each team has its own 4-digit PIN (from the league team-logins list). On the log
 
 Login short names (for example `COLT`, `FARM`) are stored in seed data with each PIN for reference; the UI uses the team dropdown + PIN.
 
+## Quick Match
+
+After login, **Quick Match** on the fixtures screen lets you pick any home and away team (any division) and score immediately — no seed fixture required. Cards are stored on the phone like league fixtures, and reappear under “Your Quick Matches” when your logged-in team is involved.
+
 ## Deploy notes
 
 `_headers` is included for hosts that honour it (for example Netlify): no-cache for HTML / SW / manifest, long-cache for fonts.

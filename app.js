@@ -32,7 +32,8 @@ let cards    = {};        // by fixture key
 let extra    = {};        // players added on the phone
 const photoURLs = {};     // object URLs for the stored chalkboard photos
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
-             sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null };
+             sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
+             qmHome:'', qmAway:'', qmMsg:'' };
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -88,6 +89,32 @@ function nextFixture(list){
   return list.find(f=>!f.bye && !f.played && (f.date>=t || (cards[f.key]&&cards[f.key].status!=='submitted')));
 }
 function venueOf(d,homeNum){ const i=SEED.info[d][homeNum-1]; return i? i.venue+(i.alley?' ('+i.alley+')':'') : ''; }
+function teamKey(d,n){ return d+'-'+n; }
+function parseTeamKey(k){ const [d,n]=String(k).split('-').map(Number); return {div:d,num:n}; }
+function sideMeta(c,side){
+  if(c.quick) return side==='home' ? {div:c.homeDiv,num:c.home} : {div:c.awayDiv,num:c.away};
+  return {div:c.div, num:side==='home'?c.home:c.away};
+}
+function sideName(c,side){ const t=sideMeta(c,side); return teamName(t.div,t.num); }
+function sideRosterKey(c,side){ const t=sideMeta(c,side); return teamKey(t.div,t.num); }
+function teamOptionsHtml(selected, skipKey){
+  let opts='<option value="">Choose a team…</option>';
+  SEED.teams.forEach((div,d)=>{
+    opts+=`<optgroup label="Division ${d+1}">`+div.map((t,i)=>{
+      const k=teamKey(d,i+1);
+      if(skipKey && k===skipKey) return '';
+      return `<option value="${k}" ${selected===k?'selected':''}>${esc(t)}</option>`;
+    }).join('')+'</optgroup>';
+  });
+  return opts;
+}
+function quickMatchesFor(d,n){
+  return Object.keys(cards).filter(k=>{
+    const c=cards[k]; if(!c||!c.quick) return false;
+    const me=teamKey(d,n);
+    return sideRosterKey(c,'home')===me || sideRosterKey(c,'away')===me;
+  }).map(k=>cards[k]).sort((a,b)=>(b.date||'').localeCompare(a.date||'') || (b.key>a.key?1:-1));
+}
 
 /* ---------- card model ---------- */
 const blankSide = () => Array.from({length:NSLOT},()=>({name:'',boxes:Array(NBOX).fill(null),spare:Array(NBOX).fill(false),fine:Array(NBOX).fill(false)}));
@@ -95,9 +122,23 @@ function ensureCard(f){
   if(!cards[f.key]){
     cards[f.key]={key:f.key,div:f.div,week:f.week,mi:f.mi,date:f.date,home:f.home,away:f.away,
       players:{home:blankSide(),away:blankSide()},hasPhoto:false,status:'draft',savedAt:null,submittedAt:null,by:null};
+    if(f.quick){ cards[f.key].quick=true; cards[f.key].homeDiv=f.homeDiv; cards[f.key].awayDiv=f.awayDiv; }
     persist(f.key);
   }
   return cards[f.key];
+}
+function openCard(key){
+  const c=cards[key]; if(!c) return;
+  ui.cardKey=key; ui.side=startSide(c); ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null;
+  ui.screen='card'; render(); window.scrollTo(0,0);
+}
+function startQuickMatch(){
+  if(!ui.qmHome||!ui.qmAway){ ui.qmMsg='Choose both the home and away teams.'; render(); return; }
+  if(ui.qmHome===ui.qmAway){ ui.qmMsg='Home and away must be different teams.'; render(); return; }
+  const h=parseTeamKey(ui.qmHome), a=parseTeamKey(ui.qmAway);
+  const key='qm-'+Date.now();
+  ensureCard({key,div:h.div,week:0,mi:0,date:todayISO(),home:h.num,away:a.num,quick:true,homeDiv:h.div,awayDiv:a.div});
+  ui.qmMsg=''; openCard(key);
 }
 function persist(key){
   if(key && cards[key]){
@@ -129,7 +170,7 @@ function startSide(c){
 function checkCard(c){
   const blockers=[], warnings=[], lines=[];
   ['home','away'].forEach(side=>{
-    const list=c.players[side], nm=teamName(c.div,side==='home'?c.home:c.away);
+    const list=c.players[side], nm=sideName(c,side);
     const named=list.filter(p=>p.name);
     const empty=named.reduce((n,p)=>n+p.boxes.filter(v=>v===null).length,0);
     const orphan=list.filter(p=>!p.name && p.boxes.some(v=>v!==null)).length;
@@ -147,7 +188,9 @@ function checkCard(c){
 }
 function exportJSON(c){
   const mk=side=>c.players[side].filter(p=>p.name).map(p=>({name:p.name,pins:pinsOf(p),boxes:p.boxes.slice(),spares:p.boxes.map((v,i)=>isSpare(p,i)?i+1:0).filter(Boolean)}));
-  return {key:'w'+c.week+'m'+c.mi,division:c.div+1,homeNum:c.home,awayNum:c.away,
+  const home=sideMeta(c,'home'), away=sideMeta(c,'away');
+  return {key:c.quick?'quick-'+c.key:'w'+c.week+'m'+c.mi,quick:!!c.quick,division:c.quick?null:c.div+1,
+    homeDivision:home.div+1,awayDivision:away.div+1,homeNum:home.num,awayNum:away.num,
     homeTotal:teamTotal(c.players.home),awayTotal:teamTotal(c.players.away),
     savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,homePlayers:mk('home'),awayPlayers:mk('away')};
 }
@@ -198,11 +241,25 @@ function settingsView(){
   </div>`;
 }
 function fixturesView(){
-  const {div:d,num:n}=session, list=fixturesFor(d,n), nx=nextFixture(list);
+  const {div:d,num:n}=session, list=fixturesFor(d,n), nx=nextFixture(list), qms=quickMatchesFor(d,n);
   let h=`<div class="wrap"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
     <div><h2 style="margin:0">${esc(teamName(d,n))}</h2><span class="muted small">Division ${d+1}</span></div>
     <button class="back" data-a="logout">Log out</button></div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
+  h+=`<div class="card"><b>Quick Match</b>
+    <p class="muted small" style="margin:6px 0 12px">Score any home v away pairing — no league fixture needed. Useful for friendlies, rearrangements, or practice.</p>
+    <button class="btn block" data-a="quick">Set up a Quick Match</button></div>`;
+  if(qms.length){
+    h+=`<div class="card"><b>Your Quick Matches</b>`;
+    qms.forEach(c=>{
+      const home=sideName(c,'home'), away=sideName(c,'away');
+      let st='<span class="muted">Not started</span>';
+      if(c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
+      else if(c.players.home.some(p=>p.name||p.boxes.some(v=>v!==null))||c.players.away.some(p=>p.name||p.boxes.some(v=>v!==null))) st='<span class="state-wait">In progress</span>';
+      h+=`<button class="frow" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · Quick Match<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>`;
+    });
+    h+='</div>';
+  }
   if(nx){
     const c=cards[nx.key], home=nx.home===n;
     const opp=teamName(d,home?nx.away:nx.home);
@@ -227,6 +284,22 @@ function fixturesView(){
   return h+'</div></div>';
 }
 
+function quickView(){
+  const defHome=ui.qmHome || (session?teamKey(session.div,session.num):'');
+  const homeSel=ui.qmHome||defHome;
+  return `<div class="wrap">
+    <button class="back" data-a="back">‹ Fixtures</button>
+    <h2 style="margin-top:16px">Quick Match</h2>
+    <p class="muted">Choose the home and away teams, then start scoring. This does not use a league fixture.</p>
+    <label class="field" for="qmHome">Home team</label>
+    <select id="qmHome">${teamOptionsHtml(homeSel)}</select>
+    <label class="field" for="qmAway">Away team</label>
+    <select id="qmAway">${teamOptionsHtml(ui.qmAway, homeSel)}</select>
+    <div class="err" role="alert" style="margin-top:10px">${esc(ui.qmMsg)}</div>
+    <button class="btn block" data-a="quick-start" style="margin-top:8px">Start scoring</button>
+  </div>`;
+}
+
 function boxHTML(c,side,slot,box,locked){
   const p=c.players[side][slot], v=p.boxes[box];
   const sel=ui.sel&&ui.sel.side===side&&ui.sel.slot===slot&&ui.sel.box===box;
@@ -235,10 +308,10 @@ function boxHTML(c,side,slot,box,locked){
 }
 function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
-  const list=c.players[side], num=side==='home'?c.home:c.away, locked=c.status==='submitted';
+  const list=c.players[side], meta=sideMeta(c,side), locked=c.status==='submitted';
   const ct=colTotals(list), ups=pinsUp(list), tot=teamTotal(list);
-  const last=(SEED.lineups[c.div+'-'+num]||[]);
-  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">${side==='home'?'Home':'Away'}</span><span class="tname">${esc(teamName(c.div,num))}</span></div>`;
+  const last=(SEED.lineups[teamKey(meta.div,meta.num)]||[]);
+  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">${side==='home'?'Home':'Away'}</span><span class="tname">${esc(sideName(c,side))}</span></div>`;
   if(!locked && list.every(p=>!p.name) && last.length) h+=`<button class="btn chalk" data-a="lineup" data-side="${side}">Use last match's line-up</button>`;
   if(!locked && list.filter(p=>p.name).length>1) h+=`<button class="btn chalk" data-a="reorder" data-side="${side}">Change the batting order</button>`;
   list.forEach((p,slot)=>{
@@ -261,13 +334,15 @@ function boardView(c,side){
 function cardView(){
   const c=curCard(); if(!c) return '';
   const th=teamTotal(c.players.home), ta=teamTotal(c.players.away);
-  const hn=teamName(c.div,c.home), an=teamName(c.div,c.away);
+  const hn=sideName(c,'home'), an=sideName(c,'away');
+  const home=sideMeta(c,'home');
   const msg = (th+ta===0) ? 'No scores yet' : th===ta ? 'All square' : (th>ta?hn:an)+' lead by '+Math.abs(th-ta);
   const locked=c.status==='submitted';
   const chk=checkCard(c);
+  const title=c.quick ? `Quick Match · ${fmtDate(c.date)}` : `Week ${c.week} · ${fmtDate(c.date)}`;
   let h=`<div class="wrap wide">
     <div class="cardhead"><button class="back" data-a="back">‹ Fixtures</button>
-      <div><b>Week ${c.week} · ${fmtDate(c.date)}</b><br><span class="muted small">${esc(venueOf(c.div,c.home))}</span></div>
+      <div><b>${title}</b><br><span class="muted small">${esc(venueOf(home.div,home.num)||'Venue not set')}</span></div>
       <div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. It will be sent to the league when there is signal. Tap "Change the card" below if something needs correcting.</div>`;
@@ -293,8 +368,8 @@ function cardView(){
 }
 
 function reorderView(c,side){
-  const list=c.players[side], num=side==='home'?c.home:c.away;
-  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">Order</span><span class="tname">${esc(teamName(c.div,num))}</span></div>
+  const list=c.players[side];
+  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">Order</span><span class="tname">${esc(sideName(c,side))}</span></div>
     <p class="ohint">Tap ▲ or ▼ to move a player one place. Tap a name to move them straight to any position. Scores move with the player.</p>`;
   list.forEach((p,i)=>{
     h+=`<div class="orow"><span class="onum">${i+1}</span>`+(p.name
@@ -326,7 +401,7 @@ function padSheet(){
   const keys=['9','8','7','6','5','4','3','2','1'].map(k=>`<button data-a="k" data-k="${k}">${k}</button>`).join('')+
     `<button data-a="kback" aria-label="Delete">⌫</button><button data-a="k" data-k="0">0</button><button data-a="closepad" style="font-size:20px">Done</button>`;
   return `<div class="sheet" role="dialog" aria-label="Enter score">
-    <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(teamName(c.div,s.side==='home'?c.home:c.away))} · ${rubLabel(s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
+    <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(sideName(c,s.side))} · ${rubLabel(s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
     <div class="keys">${keys}</div>
     <div class="navrow"><button data-a="prev" aria-label="Previous box">‹ Back</button>
       ${v===9 ? `<button class="${p.spare[s.box]?'on':''}" data-a="spare" aria-pressed="${!!p.spare[s.box]}">Spare ⬡</button>`
@@ -335,11 +410,11 @@ function padSheet(){
       <button class="next" data-a="next">Next ›</button></div></div>`;
 }
 function rosterSheet(){
-  const {side,slot}=ui.sheet, c=curCard(), num=side==='home'?c.home:c.away;
+  const {side,slot}=ui.sheet, c=curCard(), meta=sideMeta(c,side);
   const used=new Set(c.players[side].map((p,i)=>i===slot?null:norm(p.name)).filter(Boolean));
   const cur=c.players[side][slot].name;
-  const list=rosterFor(c.div,num);
-  let h=`<div class="sheet tall" role="dialog" aria-label="Choose player"><div class="sheethead"><div class="who">Player ${slot+1} · ${esc(teamName(c.div,num))}</div><button class="back" data-a="closesheet">Close</button></div>`;
+  const list=rosterFor(meta.div,meta.num);
+  let h=`<div class="sheet tall" role="dialog" aria-label="Choose player"><div class="sheethead"><div class="who">Player ${slot+1} · ${esc(sideName(c,side))}</div><button class="back" data-a="closesheet">Close</button></div>`;
   h+=`<div class="rlist">`+list.map(n=>`<button data-a="pick" data-n="${esc(n)}" ${used.has(norm(n))?'disabled':''}><span>${esc(n)}</span><small>${used.has(norm(n))?'Already playing':(norm(n)===norm(cur)?'Selected':'')}</small></button>`).join('')+`</div>`;
   if(cur) h+=`<button class="btn quiet block" data-a="movefromroster" style="margin-bottom:8px">Move this player to a different position</button>`;
   if(cur) h+=`<button class="btn quiet block" data-a="clearname" style="margin-bottom:12px">Take this player out</button>`;
@@ -364,6 +439,7 @@ function render(){
   else if(ui.screen==='login') h+=loginView();
   else if(ui.screen==='settings') h+=settingsView();
   else if(ui.screen==='fixtures') h+=fixturesView();
+  else if(ui.screen==='quick') h+=quickView();
   else if(ui.screen==='card') h+=cardView()+(ui.sel?padSheet():'')+(ui.sheet?rosterSheet():'')+(ui.moveSheet?moveSheet():'');
   $app.innerHTML=h;
   if(ui.sel){ scrollToSel(); requestAnimationFrame(scrollToSel); }
@@ -404,7 +480,7 @@ function pickPlayer(name){
   else render();
 }
 function addPlayer(name){
-  const c=curCard(), {side}=ui.sheet, num=side==='home'?c.home:c.away, k=c.div+'-'+num;
+  const c=curCard(), {side}=ui.sheet, k=sideRosterKey(c,side);
   const clean=name.trim().replace(/\s+/g,' ').split(' ').map(w=>w? w[0].toUpperCase()+w.slice(1):w).join(' ');
   extra[k]=extra[k]||[]; extra[k].push(clean); kvSave('extraRoster',extra);
   pickPlayer(clean);
@@ -443,10 +519,14 @@ document.addEventListener('click',e=>{
     case 'fines': settings.fines=!settings.fines; kvSave('settings',settings); render(); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
-    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; render(); break;
+    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmHome=''; ui.qmAway=''; ui.qmMsg=''; render(); break;
+    case 'quick': ui.qmHome=session?teamKey(session.div,session.num):''; ui.qmAway=''; ui.qmMsg=''; ui.screen='quick'; render(); window.scrollTo(0,0); break;
+    case 'quick-start': startQuickMatch(); break;
+    case 'open-quick': openCard(D.key); break;
     case 'open': {
-      const [d,w,mi]=D.key.split('-').map(Number), f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);
-      ensureCard(f); ui.cardKey=D.key; ui.side=startSide(cards[D.key]); ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null; ui.screen='card'; render(); window.scrollTo(0,0); break; }
+      const f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);
+      if(!f||f.bye) break;
+      ensureCard(f); openCard(D.key); break; }
     case 'back': ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null; ui.screen='fixtures'; render(); break;
     case 'side': ui.side=D.side; render(); break;
     case 'box': {
@@ -479,13 +559,13 @@ document.addEventListener('click',e=>{
     case 'addnew': {
       const t=ui.newName.trim(); if(t.length<3){ ui.sheetMsg='Type the player\'s initial and surname first.'; render(); break; }
       ui.sheetMsg='';
-      const c=curCard(), {side}=ui.sheet, num=side==='home'?c.home:c.away, sim=similar(t,rosterFor(c.div,num));
+      const c=curCard(), {side}=ui.sheet, meta=sideMeta(c,side), sim=similar(t,rosterFor(meta.div,meta.num));
       if(sim&&sim.exact){ pickPlayer(sim.name); break; }
       if(sim){ ui.dupe=sim; render(); break; }
       addPlayer(t); break; }
     case 'forceadd': addPlayer(ui.newName); break;
     case 'lineup': {
-      const c=curCard(), num=D.side==='home'?c.home:c.away, names=(SEED.lineups[c.div+'-'+num]||[]).slice(0,NSLOT);
+      const c=curCard(), meta=sideMeta(c,D.side), names=(SEED.lineups[teamKey(meta.div,meta.num)]||[]).slice(0,NSLOT);
       names.forEach((n,i)=>{ c.players[D.side][i].name=n; }); persist(c.key); render(); break; }
     case 'submit': { const c=curCard(); if(checkCard(c).blockers.length) break;
       c.status='submitted'; c.submittedAt=new Date().toISOString(); c.by=teamName(session.div,session.num); persist(c.key); ui.sel=null; render(); window.scrollTo(0,0); break; }
@@ -494,6 +574,8 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('change',e=>{
   if(e.target.id==='teamSel'){ ui.teamSel=e.target.value; ui.pinMsg=''; }
+  if(e.target.id==='qmHome'){ ui.qmHome=e.target.value; if(ui.qmAway===ui.qmHome) ui.qmAway=''; ui.qmMsg=''; render(); }
+  if(e.target.id==='qmAway'){ ui.qmAway=e.target.value; ui.qmMsg=''; }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
     compressBlob(e.target.files[0])
