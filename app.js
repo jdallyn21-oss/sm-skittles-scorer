@@ -19,6 +19,9 @@ const db=()=>dbp||(dbp=openDB());
 const idbPut=(s,k,v)=>db().then(d=>new Promise((res,rej)=>{
   const t=d.transaction(s,'readwrite'); t.objectStore(s).put(v,k);
   t.oncomplete=()=>res(true); t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error); }));
+const idbDel=(s,k)=>db().then(d=>new Promise((res,rej)=>{
+  const t=d.transaction(s,'readwrite'); t.objectStore(s).delete(k);
+  t.oncomplete=()=>res(true); t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error); }));
 const idbAll=s=>db().then(d=>new Promise((res,rej)=>{
   const out={}, q=d.transaction(s).objectStore(s).openCursor();
   q.onsuccess=()=>{ const c=q.result; if(c){ out[c.key]=c.value; c.continue(); } else res(out); };
@@ -37,6 +40,8 @@ const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const MISSING_PLAYER = 'Player Missing';
+const playerLabel = p => (p && p.name) ? p.name : MISSING_PLAYER;
 const teamName = (d,n) => SEED.teams[d][n-1];
 const norm = s => s.trim().replace(/\s+/g,' ').toLowerCase();
 function surname(n){ const t=n.trim().split(/\s+/); return t[t.length-1].toLowerCase(); }
@@ -131,6 +136,14 @@ function openCard(key){
   const c=cards[key]; if(!c) return;
   ui.cardKey=key; ui.side=startSide(c); ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null;
   ui.screen='card'; render(); window.scrollTo(0,0);
+}
+function deleteQuickMatch(key){
+  const c=cards[key]; if(!c||!c.quick) return;
+  delete cards[key];
+  if(photoURLs[key]){ URL.revokeObjectURL(photoURLs[key]); delete photoURLs[key]; }
+  Promise.all([idbDel('cards',key), idbDel('photos',key)]).catch(saveFailed);
+  if(ui.cardKey===key){ ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null; ui.screen='fixtures'; }
+  render();
 }
 function startQuickMatch(){
   if(!session){ ui.qmMsg='Log in as a team first.'; render(); return; }
@@ -234,10 +247,10 @@ function matchPdfLines(c){
     lines.push({t:'Player          B1  B2  B3  B4  B5  B6   Tot', size:9, gap:2});
     // keep card batting order (slot order) — do not sort by name or pins
     list.forEach(p=>{
-      if(!p.name) return;
+      const label=playerLabel(p);
       const boxes=p.boxes.map(v=>v===null?'-':String(v)).map(x=>('   '+x).slice(-3)).join(' ');
-      const name=(pdfSafe(p.name)+'                ').slice(0,14);
-      lines.push({t:name+' '+boxes+'  '+('   '+pinsOf(p)).slice(-3), size:10, mono:true});
+      const name=(pdfSafe(label)+'                ').slice(0,14);
+      lines.push({t:name+' '+boxes+'  '+(p.name?('   '+pinsOf(p)).slice(-3):'  -'), size:10, mono:true});
     });
     if(settings.rubs===2){
       lines.push({t:'Rub Score: '+ups.join(' · '), size:10, gap:2});
@@ -413,7 +426,10 @@ function fixturesView(){
       let st='<span class="muted">Not started</span>';
       if(c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
       else if(c.players.home.some(p=>p.name||p.boxes.some(v=>v!==null))||c.players.away.some(p=>p.name||p.boxes.some(v=>v!==null))) st='<span class="state-wait">In progress</span>';
-      h+=`<button class="frow" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · Quick Match<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>`;
+      h+=`<div class="qm-row">
+        <button class="frow qm-open" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · Quick Match<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>
+        <button class="qm-del" data-a="delete-quick" data-key="${esc(c.key)}" aria-label="Delete Quick Match ${esc(home)} versus ${esc(away)}">Delete</button>
+      </div>`;
     });
     h+='</div>';
   }
@@ -466,7 +482,7 @@ function boxHTML(c,side,slot,box,locked){
   const p=c.players[side][slot], v=p.boxes[box];
   const sel=ui.sel&&ui.sel.side===side&&ui.sel.slot===slot&&ui.sel.box===box;
   const cls=['box', settings.rubs===2&&box%2===0&&box>0?'gs':'', sel?'sel':'', isSpare(p,box)?'spare':'', settings.fines&&p.fine[box]?'fine':''].join(' ');
-  return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(p.name||'Player '+(slot+1))}, box ${box+1}, ${v===null?'empty':v}">${v===null?'':v}</button>`;
+  return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}">${v===null?'':v}</button>`;
 }
 function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
@@ -479,7 +495,7 @@ function boardView(c,side){
   list.forEach((p,slot)=>{
     const nameBtn=p.name
       ? `<button class="pname" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${esc(initials(p.name))}<span class="full">${esc(p.name)}</span></button>`
-      : `<button class="pname empty" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">Choose player ${slot+1}</button>`;
+      : `<button class="pname empty" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${MISSING_PLAYER}</button>`;
     h+=`<div class="prow"><div class="phead">${nameBtn}<div class="ptot">${p.boxes.some(v=>v!==null)?pinsOf(p):''}</div></div><div class="boxes">`+
        Array.from({length:NBOX},(_,b)=>boxHTML(c,side,slot,b,locked)).join('')+`</div></div>`;
   });
@@ -540,14 +556,14 @@ function reorderView(c,side){
       ? `<button class="oname" data-a="movepick" data-side="${side}" data-slot="${i}">${esc(initials(p.name))}<span class="full">${esc(p.name)}</span></button>
          <button class="arr" aria-label="Move ${esc(p.name)} up" data-a="up" data-side="${side}" data-slot="${i}" ${i===0?'disabled':''}>▲</button>
          <button class="arr" aria-label="Move ${esc(p.name)} down" data-a="down" data-side="${side}" data-slot="${i}" ${i===list.length-1?'disabled':''}>▼</button>`
-      : `<span class="oname empty">Empty</span>`)+`</div>`;
+      : `<span class="oname empty">${MISSING_PLAYER}</span>`)+`</div>`;
   });
   return h+`<button class="btn brass block" data-a="reorderdone" style="margin-top:14px">Done</button></section>`;
 }
 function moveSheet(){
   const {side,slot}=ui.moveSheet, list=curCard().players[side], p=list[slot];
   let h=`<div class="sheet tall" role="dialog" aria-label="Move player"><div class="sheethead"><div class="who">Move ${esc(p.name)} to which position?</div><button class="back" data-a="closemove">Close</button></div><div class="rlist">`;
-  list.forEach((q,i)=>{ h+=`<button data-a="moveto" data-to="${i}" ${i===slot?'disabled':''}><span><b>${i+1}</b>&nbsp; ${q.name?esc(q.name):'Empty'}</span><small>${i===slot?'Now':''}</small></button>`; });
+  list.forEach((q,i)=>{ h+=`<button data-a="moveto" data-to="${i}" ${i===slot?'disabled':''}><span><b>${i+1}</b>&nbsp; ${q.name?esc(q.name):MISSING_PLAYER}</span><small>${i===slot?'Now':''}</small></button>`; });
   return h+'</div></div>';
 }
 function movePlayer(side,from,to){
@@ -688,6 +704,12 @@ document.addEventListener('click',e=>{
     case 'qm-side': ui.qmSide=D.side==='away'?'away':'home'; ui.qmMsg=''; render(); break;
     case 'quick-start': startQuickMatch(); break;
     case 'open-quick': openCard(D.key); break;
+    case 'delete-quick': {
+      const c=cards[D.key];
+      if(!c||!c.quick) break;
+      const label=sideName(c,'home')+' v '+sideName(c,'away');
+      if(window.confirm('Delete Quick Match '+label+' from this phone? This cannot be undone.')) deleteQuickMatch(D.key);
+      break; }
     case 'open': {
       const f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);
       if(!f||f.bye) break;

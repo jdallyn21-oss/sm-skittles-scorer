@@ -33,11 +33,13 @@ Login short names (for example `COLT`, `FARM`) are stored in seed data with each
 
 ## Quick Match
 
-After login, **Quick Match** on the fixtures screen lets you score as your logged-in team against any opponent (any division) without a seed fixture. Choose whether you are home or away, then pick the opposing team. Cards stay on the phone and show under “Your Quick Matches”.
+After login, **Quick Match** on the fixtures screen lets you score as your logged-in team against any opponent (any division) without a seed fixture. Choose whether you are home or away, then pick the opposing team. Cards stay on the phone and show under “Your Quick Matches”. Each listing has a **Delete** control to remove that Quick Match (and its photo) from the phone.
+
+Empty lineup slots show as **Player Missing** on the board, reorder UI, and result PDF.
 
 ## Share result PDF
 
-On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches.
+On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. The PDF keeps the card’s batting order and uses **Rub Score** (then Each rub, when double rubs) to match the board.
 
 ## Deploy notes
 

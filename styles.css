@@ -65,6 +65,10 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .tag{display:inline-block;font-weight:700;font-size:14px;padding:2px 10px;border-radius:12px;background:var(--felt);color:var(--on-felt);margin-right:6px}
 .frow{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:14px 4px;border-top:1px solid var(--line);width:100%;background:none;border-left:0;border-right:0;border-bottom:0;text-align:left}
 .frow:first-child{border-top:0}
+.qm-row{display:flex;gap:8px;align-items:stretch;border-top:1px solid var(--line)}
+.qm-row:first-child{border-top:0}
+.qm-row .qm-open{flex:1;min-width:0;border-top:0;padding-left:0;padding-right:0}
+.qm-del{flex:0 0 auto;align-self:center;min-height:48px;padding:8px 12px;border-radius:8px;border:2px solid var(--line);background:transparent;color:var(--bad);font-weight:700;font-size:15px}
 .state-done{color:var(--good);font-weight:600}
 .state-wait{color:var(--brass);font-weight:700}
 
