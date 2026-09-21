@@ -35,6 +35,10 @@ Login short names (for example `COLT`, `FARM`) are stored in seed data with each
 
 After login, **Quick Match** on the fixtures screen lets you score as your logged-in team against any opponent (any division) without a seed fixture. Choose whether you are home or away, then pick the opposing team. Cards stay on the phone and show under “Your Quick Matches”.
 
+## Share result PDF
+
+On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches.
+
 ## Deploy notes
 
 `_headers` is included for hosts that honour it (for example Netlify): no-cache for HTML / SW / manifest, long-cache for fonts.
