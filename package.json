@@ -1,0 +1,10 @@
+{
+  "name": "skittles-scorer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "South Molton Skittles Scorer — offline-capable PWA for league match scoring",
+  "scripts": {
+    "dev": "npx --yes serve@14 -l 43127 --no-clipboard .",
+    "start": "npx --yes serve@14 -l 43127 --no-clipboard ."
+  }
+}
