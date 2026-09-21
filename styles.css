@@ -89,6 +89,13 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .tabs{display:flex;gap:6px;margin-bottom:10px}
 .tabs button{flex:1;min-height:52px;border-radius:8px;border:2px solid var(--line);background:var(--card);font-weight:700;font-size:18px}
 .tabs button.on{background:var(--felt);color:var(--on-felt);border-color:var(--felt)}
+.setup-side{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
+.setup-side-btn{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-height:64px;padding:12px 14px;border-radius:8px;border:2px solid var(--line);background:var(--card);text-align:left;font:inherit}
+.setup-side-btn.on{background:var(--felt);color:var(--on-felt);border-color:var(--felt)}
+.setup-side-title{font-weight:700;font-size:18px}
+.setup-side-sub{font-size:14px;opacity:.9}
+.setup-preview{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;margin-top:16px;padding:12px;border-radius:8px;border:1px solid var(--line);background:rgba(31,59,44,.06)}
+.setup-preview-v{font:400 20px/1 'Rye',serif;opacity:.7}
 .boards{display:block}
 .board{display:none;background:var(--board);color:var(--chalk);border:6px solid var(--oak);border-radius:6px;padding:10px 8px 14px;margin-bottom:14px;font-family:'Patrick Hand','Comic Sans MS',cursive}
 .board.on{display:block}

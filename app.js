@@ -596,22 +596,40 @@ function quickView(){
     const cup=id==='league'?'':' · Cup';
     return `<option value="${id}" ${fmtId===id?'selected':''}>${esc(f.name)}${cup}</option>`;
   }).join('');
+  const oppLabel=ui.qmOpp ? (()=>{ const t=parseTeamKey(ui.qmOpp); return teamName(t.div,t.num); })() : 'Opposing team';
+  const homeLine=side==='home' ? meName : (ui.qmOpp?oppLabel:'Opposing team');
+  const awayLine=side==='away' ? meName : (ui.qmOpp?oppLabel:'Opposing team');
   return `<div class="wrap">
     <button class="back" data-a="back">‹ Fixtures</button>
     <h2 style="margin-top:16px">Quick Match / Cup</h2>
-    <p class="muted">You are scoring as <b>${esc(meName)}</b>. Pick the format, home or away, then the opposition.</p>
-    <label class="field" for="qmFormat">Match format</label>
-    <select id="qmFormat">${fmtOpts}</select>
-    <p class="muted small" style="margin:8px 0 0">${esc(fmt.summary)}</p>
-    <p class="field" style="margin-bottom:8px;margin-top:16px">Your side</p>
-    <div class="tabs" style="margin-bottom:16px">
-      <button class="${side==='home'?'on':''}" data-a="qm-side" data-side="home">We are home</button>
-      <button class="${side==='away'?'on':''}" data-a="qm-side" data-side="away">We are away</button>
+    <p class="muted">You are logged in as <b>${esc(meName)}</b>. Set up the game below.</p>
+    <div class="card">
+      <b>Game setup</b>
+      <label class="field" for="qmFormat">Match format</label>
+      <select id="qmFormat">${fmtOpts}</select>
+      <p class="muted small" style="margin:8px 0 0">${esc(fmt.summary)}</p>
+      <p class="field" style="margin-bottom:8px;margin-top:16px">Your team’s side</p>
+      <p class="muted small" style="margin:0 0 10px">Choose whether <b>${esc(meName)}</b> is home or away. The opponent fills the other side.</p>
+      <div class="setup-side" role="group" aria-label="Your team side">
+        <button type="button" class="setup-side-btn ${side==='home'?'on':''}" data-a="qm-side" data-side="home" aria-pressed="${side==='home'}">
+          <span class="setup-side-title">Home</span>
+          <span class="setup-side-sub">${esc(meName)}</span>
+        </button>
+        <button type="button" class="setup-side-btn ${side==='away'?'on':''}" data-a="qm-side" data-side="away" aria-pressed="${side==='away'}">
+          <span class="setup-side-title">Away</span>
+          <span class="setup-side-sub">${esc(meName)}</span>
+        </button>
+      </div>
+      <label class="field" for="qmOpp">Opposing team</label>
+      <select id="qmOpp">${teamOptionsHtml(ui.qmOpp, meKey)}</select>
+      <div class="setup-preview" aria-live="polite">
+        <div><span class="muted small">Home</span><br><b>${esc(homeLine)}</b>${side==='home'?' <span class="tag">You</span>':''}</div>
+        <div class="setup-preview-v">v</div>
+        <div style="text-align:right"><span class="muted small">Away</span><br><b>${esc(awayLine)}</b>${side==='away'?' <span class="tag">You</span>':''}</div>
+      </div>
+      <div class="err" role="alert" style="margin-top:10px">${esc(ui.qmMsg)}</div>
+      <button class="btn block" data-a="quick-start" style="margin-top:8px">Start scoring</button>
     </div>
-    <label class="field" for="qmOpp">Opposing team</label>
-    <select id="qmOpp">${teamOptionsHtml(ui.qmOpp, meKey)}</select>
-    <div class="err" role="alert" style="margin-top:10px">${esc(ui.qmMsg)}</div>
-    <button class="btn block" data-a="quick-start" style="margin-top:8px">Start scoring</button>
   </div>`;
 }
 
@@ -847,7 +865,9 @@ document.addEventListener('click',e=>{
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
     case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; render(); break;
     case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
-    case 'qm-side': ui.qmSide=D.side==='away'?'away':'home'; ui.qmMsg=''; render(); break;
+    case 'qm-side': {
+      const next=String(D.side||'').toLowerCase()==='away'?'away':'home';
+      ui.qmSide=next; ui.qmMsg=''; render(); break; }
     case 'quick-start': startQuickMatch(); break;
     case 'open-quick': openCard(D.key); break;
     case 'delete-quick': {
@@ -910,7 +930,7 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('change',e=>{
   if(e.target.id==='teamSel'){ ui.teamSel=e.target.value; ui.pinMsg=''; }
-  if(e.target.id==='qmOpp'){ ui.qmOpp=e.target.value; ui.qmMsg=''; }
+  if(e.target.id==='qmOpp'){ ui.qmOpp=e.target.value; ui.qmMsg=''; render(); }
   if(e.target.id==='qmFormat'){ ui.qmFormat=e.target.value; ui.qmMsg=''; render(); }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
