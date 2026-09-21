@@ -33,7 +33,7 @@ let extra    = {};        // players added on the phone
 const photoURLs = {};     // object URLs for the stored chalkboard photos
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
-             qmHome:'', qmAway:'', qmMsg:'' };
+             qmSide:'home', qmOpp:'', qmMsg:'' };
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -133,11 +133,15 @@ function openCard(key){
   ui.screen='card'; render(); window.scrollTo(0,0);
 }
 function startQuickMatch(){
-  if(!ui.qmHome||!ui.qmAway){ ui.qmMsg='Choose both the home and away teams.'; render(); return; }
-  if(ui.qmHome===ui.qmAway){ ui.qmMsg='Home and away must be different teams.'; render(); return; }
-  const h=parseTeamKey(ui.qmHome), a=parseTeamKey(ui.qmAway);
+  if(!session){ ui.qmMsg='Log in as a team first.'; render(); return; }
+  if(ui.qmSide!=='home' && ui.qmSide!=='away'){ ui.qmMsg='Choose whether you are home or away.'; render(); return; }
+  if(!ui.qmOpp){ ui.qmMsg='Choose the opposing team.'; render(); return; }
+  const me={div:session.div,num:session.num};
+  const opp=parseTeamKey(ui.qmOpp);
+  if(teamKey(opp.div,opp.num)===teamKey(me.div,me.num)){ ui.qmMsg='Pick a different team as the opposition.'; render(); return; }
+  const home=ui.qmSide==='home'?me:opp, away=ui.qmSide==='home'?opp:me;
   const key='qm-'+Date.now();
-  ensureCard({key,div:h.div,week:0,mi:0,date:todayISO(),home:h.num,away:a.num,quick:true,homeDiv:h.div,awayDiv:a.div});
+  ensureCard({key,div:home.div,week:0,mi:0,date:todayISO(),home:home.num,away:away.num,quick:true,homeDiv:home.div,awayDiv:away.div});
   ui.qmMsg=''; openCard(key);
 }
 function persist(key){
@@ -247,7 +251,7 @@ function fixturesView(){
     <button class="back" data-a="logout">Log out</button></div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
   h+=`<div class="card"><b>Quick Match</b>
-    <p class="muted small" style="margin:6px 0 12px">Score any home v away pairing — no league fixture needed. Useful for friendlies, rearrangements, or practice.</p>
+    <p class="muted small" style="margin:6px 0 12px">Score as your team against any opponent — no league fixture needed. Useful for friendlies, rearrangements, or practice.</p>
     <button class="btn block" data-a="quick">Set up a Quick Match</button></div>`;
   if(qms.length){
     h+=`<div class="card"><b>Your Quick Matches</b>`;
@@ -285,16 +289,21 @@ function fixturesView(){
 }
 
 function quickView(){
-  const defHome=ui.qmHome || (session?teamKey(session.div,session.num):'');
-  const homeSel=ui.qmHome||defHome;
+  if(!session) return `<div class="wrap"><button class="back" data-a="back">‹ Fixtures</button><p class="muted">Log in first.</p></div>`;
+  const meName=teamName(session.div,session.num);
+  const meKey=teamKey(session.div,session.num);
+  const side=ui.qmSide==='away'?'away':'home';
   return `<div class="wrap">
     <button class="back" data-a="back">‹ Fixtures</button>
     <h2 style="margin-top:16px">Quick Match</h2>
-    <p class="muted">Choose the home and away teams, then start scoring. This does not use a league fixture.</p>
-    <label class="field" for="qmHome">Home team</label>
-    <select id="qmHome">${teamOptionsHtml(homeSel)}</select>
-    <label class="field" for="qmAway">Away team</label>
-    <select id="qmAway">${teamOptionsHtml(ui.qmAway, homeSel)}</select>
+    <p class="muted">You are scoring as <b>${esc(meName)}</b>. Choose home or away for your team, then pick the opposition.</p>
+    <p class="field" style="margin-bottom:8px">Your side</p>
+    <div class="tabs" style="margin-bottom:16px">
+      <button class="${side==='home'?'on':''}" data-a="qm-side" data-side="home">We are home</button>
+      <button class="${side==='away'?'on':''}" data-a="qm-side" data-side="away">We are away</button>
+    </div>
+    <label class="field" for="qmOpp">Opposing team</label>
+    <select id="qmOpp">${teamOptionsHtml(ui.qmOpp, meKey)}</select>
     <div class="err" role="alert" style="margin-top:10px">${esc(ui.qmMsg)}</div>
     <button class="btn block" data-a="quick-start" style="margin-top:8px">Start scoring</button>
   </div>`;
@@ -519,8 +528,9 @@ document.addEventListener('click',e=>{
     case 'fines': settings.fines=!settings.fines; kvSave('settings',settings); render(); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
-    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmHome=''; ui.qmAway=''; ui.qmMsg=''; render(); break;
-    case 'quick': ui.qmHome=session?teamKey(session.div,session.num):''; ui.qmAway=''; ui.qmMsg=''; ui.screen='quick'; render(); window.scrollTo(0,0); break;
+    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; render(); break;
+    case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.screen='quick'; render(); window.scrollTo(0,0); break;
+    case 'qm-side': ui.qmSide=D.side==='away'?'away':'home'; ui.qmMsg=''; render(); break;
     case 'quick-start': startQuickMatch(); break;
     case 'open-quick': openCard(D.key); break;
     case 'open': {
@@ -574,8 +584,7 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('change',e=>{
   if(e.target.id==='teamSel'){ ui.teamSel=e.target.value; ui.pinMsg=''; }
-  if(e.target.id==='qmHome'){ ui.qmHome=e.target.value; if(ui.qmAway===ui.qmHome) ui.qmAway=''; ui.qmMsg=''; render(); }
-  if(e.target.id==='qmAway'){ ui.qmAway=e.target.value; ui.qmMsg=''; }
+  if(e.target.id==='qmOpp'){ ui.qmOpp=e.target.value; ui.qmMsg=''; }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
     compressBlob(e.target.files[0])

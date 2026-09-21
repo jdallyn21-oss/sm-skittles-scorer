@@ -33,7 +33,7 @@ Login short names (for example `COLT`, `FARM`) are stored in seed data with each
 
 ## Quick Match
 
-After login, **Quick Match** on the fixtures screen lets you pick any home and away team (any division) and score immediately — no seed fixture required. Cards are stored on the phone like league fixtures, and reappear under “Your Quick Matches” when your logged-in team is involved.
+After login, **Quick Match** on the fixtures screen lets you score as your logged-in team against any opponent (any division) without a seed fixture. Choose whether you are home or away, then pick the opposing team. Cards stay on the phone and show under “Your Quick Matches”.
 
 ## Deploy notes
 
