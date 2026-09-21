@@ -315,8 +315,18 @@ function exportJSON(c){
 
 /* ---------- result PDF (offline, no library) ---------- */
 function pdfSafe(s){
-  return String(s).replace(/[\u2018\u2019]/g,"'").replace(/[\u201C\u201D]/g,'"').replace(/[\u2013\u2014]/g,'-')
-    .replace(/[^\x20-\x7E]/g,'?');
+  // Helvetica here is ASCII/WinAnsi-safe ASCII only — map common punctuation so PDFs
+  // do not fill with "?" for middots, dashes, etc.
+  return String(s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[\u2018\u2019\u02BC\u0060]/g,"'")
+    .replace(/[\u201C\u201D]/g,'"')
+    .replace(/[\u2013\u2014\u2212]/g,'-')
+    .replace(/[\u00A0\u202F\u2009]/g,' ')
+    .replace(/[\u00B7\u2022\u2023\u22C5]/g,'|')
+    .replace(/\u2026/g,'...')
+    .replace(/\u00D7/g,'x')
+    .replace(/[^\x20-\x7E]/g,'');
 }
 function pdfEscape(s){ return pdfSafe(s).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)'); }
 function matchPdfFileName(c){
@@ -674,7 +684,7 @@ function cardView(){
       <div><b>${title}</b><br><span class="muted small">${esc(fmt.summary)}</span><br><span class="muted small">${esc(venueOf(home.div,home.num)||'Venue not set')}</span></div>
       <div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
-  if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. It will be sent to the league when there is signal. Tap "Change the card" below if something needs correcting.</div>`;
+  if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
   h+=`<div class="strip" aria-live="polite"><div class="row">
       <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
       <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
