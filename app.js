@@ -14,7 +14,7 @@ const FORMATS = {
   'western-counties': {
     id:'western-counties', name:'Western Counties', short:'Western Counties',
     slots:8, rubs:6, scoring:'mfm-rub', pairRubs:true, maxScore:48,
-    summary:'8 players a side. Man for Man across 6 rubs (max 48). First 4 rubs played 2 at a time; final 2 rubs played 2-by-2 on each man-for-man pair (Team 1 player A, then Team 2 player A, and so on).'
+    summary:'8 players a side. Man for Man across 6 rubs (max 48). Rubs are played 2 at a time (no head-to-head play order on the final rubs).'
   },
   'sid-squire': {
     id:'sid-squire', name:'Sid Squire', short:'Sid Squire',
@@ -270,21 +270,8 @@ function matchScore(c){
 }
 function entryOrder(c){
   const fmt=cardFormat(c), out=[];
-  // Western Counties: first 4 rubs 2-at-a-time (all of one side, then the other);
-  // final 2 rubs: both boxes by home player A, then both by away player A, pair by pair.
-  if(fmt.id==='western-counties'){
-    [[0,1],[2,3]].forEach(g=>{
-      ['home','away'].forEach(side=>{
-        for(let slot=0;slot<fmt.slots;slot++) g.forEach(box=>out.push({side,slot,box}));
-      });
-    });
-    for(let slot=0;slot<fmt.slots;slot++){
-      [4,5].forEach(box=>out.push({side:'home',slot,box}));
-      [4,5].forEach(box=>out.push({side:'away',slot,box}));
-    }
-    return out;
-  }
-  // Default: home always starts. A team plays its rub(s) through all players, then play passes to the other team
+  // Home starts. For each rub group, one side plays through all players, then the other side.
+  // Western Counties uses paired rubs (2 at a time) for all six rubs — no final-rubs head-to-head order.
   groupsFor(c).forEach(g=>['home','away'].forEach(side=>{
     for(let slot=0;slot<fmt.slots;slot++) g.forEach(box=>out.push({side,slot,box}));
   }));
@@ -379,7 +366,7 @@ function matchPdfLines(c){
   if(fmt.scoring==='mfm-rub'){
     lines.push({t:'Man for Man (each rub vs opposite number): '+sc.home+' – '+sc.away+' (max '+fmt.maxScore+')', bold:true, size:10, gap:4});
     if(fmt.id==='western-counties'){
-      lines.push({t:'Play order: first 4 rubs 2 at a time; final 2 rubs 2-by-2 on each man-for-man pair (home then away).', size:9, gap:6});
+      lines.push({t:'Play order: rubs played 2 at a time throughout (no final-rubs head-to-head order).', size:9, gap:6});
     }
   } else if(fmt.scoring==='mfm-total'){
     lines.push({t:'Man for Man (highest total vs opposite number): '+sc.home+' – '+sc.away+' (best of '+fmt.maxScore+')', bold:true, size:10, gap:6});
