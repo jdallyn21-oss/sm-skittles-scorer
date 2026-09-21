@@ -36,7 +36,7 @@ Login short names (for example `COLT`, `FARM`) are stored in seed data with each
 After login, **Quick Match / Cup** lets you score as your logged-in team against any opponent. Choose a **match format** first:
 
 - **League / friendly** — 8 players, 6 rubs, pin totals (existing Quick Match behaviour)
-- **Western Counties** — 8 players, 6 rubs, Man for Man per rub (max 48)
+- **Western Counties** — 8 players, 6 rubs, Man for Man per rub (max 48). First 4 rubs 2 at a time; final 2 rubs 2-by-2 per man-for-man pair.
 - **Sid Squire** — 5 players, 8 rubs, pin totals
 - **Pidler** — 8 players, 6 rubs, pin totals
 - **Front Pin** — 6 players, 6 rubs, pin totals
