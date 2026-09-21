@@ -52,6 +52,9 @@ On a completed match card (submitted, or fully ready to submit), use **Share res
 
 `_headers` is included for hosts that honour it (for example Netlify): no-cache for HTML / SW / manifest, long-cache for fonts.
 
-## Android / live
+## Phone / live (Android + iPhone)
 
-Static PWA (relative paths, service worker, web manifest). For a temporary public HTTPS URL during a Cloud Agent session, run the local server on port 43127 and `cloudflared tunnel --url http://127.0.0.1:43127`. Phone steps: open the HTTPS URL in Chrome, then optional **Add to Home screen**.
+Static PWA (relative paths, service worker, web manifest). Temporary public HTTPS: serve on port 43127 and `cloudflared tunnel --url http://127.0.0.1:43127`.
+
+- **Android:** open the HTTPS URL in **Chrome** → optional Install / Add to Home screen.
+- **iPhone:** open in **Safari** → Share → **Add to Home Screen** (standalone install is Safari-only on iOS).
