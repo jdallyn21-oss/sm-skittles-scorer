@@ -329,6 +329,11 @@ function pdfSafe(s){
     .replace(/[^\x20-\x7E]/g,'');
 }
 function pdfEscape(s){ return pdfSafe(s).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)'); }
+function pdfPad(s,w,dir){
+  s=pdfSafe(String(s==null?'':s));
+  if(s.length>w) s=s.slice(0,w);
+  return dir==='r' ? s.padStart(w,' ') : s.padEnd(w,' ');
+}
 function matchPdfFileName(c){
   const slug=s=>pdfSafe(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
   return 'skittles-'+slug(sideName(c,'home'))+'-v-'+slug(sideName(c,'away'))+'-'+(c.date||todayISO())+'.pdf';
@@ -337,61 +342,87 @@ function matchPdfLines(c){
   const hn=sideName(c,'home'), an=sideName(c,'away');
   const sc=matchScore(c), fmt=cardFormat(c);
   const home=sideMeta(c,'home');
-  const lines=[];
-  lines.push({t:'South Molton Skittles Scorer', bold:true, size:16});
-  lines.push({t:c.quick?(fmt.id==='league'?'Quick Match result':fmt.name+' cup result'):'League match result', size:11, gap:4});
-  lines.push({t:hn+'  v  '+an, bold:true, size:14, gap:8});
-  lines.push({t:(c.quick?(fmt.id==='league'?'Quick Match':fmt.name+' cup'):'Week '+c.week)+' · '+fmtDate(c.date)});
-  lines.push({t:fmt.summary, size:9, gap:4});
-  const ven=venueOf(home.div,home.num); if(ven) lines.push({t:ven});
   const unit=sc.mode==='pins'?'':' pts';
-  lines.push({t:'Final score  '+sc.home+' – '+sc.away+unit+(sc.max?' (max '+sc.max+')':''), bold:true, size:13, gap:4});
-  if(sc.mode!=='pins') lines.push({t:'Pins  '+sc.pins.home+' – '+sc.pins.away+' · '+sc.caption, size:10, gap:6});
-  if(sc.home!==sc.away) lines.push({t:(sc.home>sc.away?hn:an)+' win by '+Math.abs(sc.home-sc.away)+(sc.mode==='pins'?'':' pts'), gap:6});
-  else lines.push({t:'Match drawn', gap:6});
+  const rubs=fmt.rubs;
+  // Portrait mono table: name + rub cols + total (~62 Courier chars)
+  const nameW=Math.max(12, 62 - (rubs*4) - 5);
+  const colW=4, totW=5;
+  const tableW=nameW + rubs*colW + totW;
+  const rule=(ch)=>({t:ch.repeat(tableW), mono:true, size:8, gap:2});
+  const rowPlayer=(label, boxes, tot)=>{
+    let t=pdfPad(label,nameW);
+    for(let i=0;i<rubs;i++){
+      const v=boxes[i];
+      t+=pdfPad(v===null||v===undefined?'-':String(v), colW, 'r');
+    }
+    t+=pdfPad(tot===null||tot===undefined?'-':String(tot), totW, 'r');
+    return {t, mono:true, size:8, gap:2};
+  };
+  const hdr=(()=>{
+    let t=pdfPad('Player',nameW);
+    for(let i=0;i<rubs;i++) t+=pdfPad('R'+(i+1), colW, 'r');
+    t+=pdfPad('Tot', totW, 'r');
+    return {t, mono:true, size:8, gap:2};
+  })();
+
+  const lines=[];
+  // RESULT AT TOP (screenshot-friendly)
+  lines.push({t:'SKITTLES SCORER', bold:true, size:13, gap:8});
+  lines.push({t:'RESULT', bold:true, size:11, gap:4});
+  lines.push(rule('='));
+  lines.push({t:pdfPad(hn, Math.min(40, tableW-10))+pdfPad(String(sc.home)+unit, 10, 'r'), mono:true, size:11, gap:3});
+  lines.push({t:pdfPad(an, Math.min(40, tableW-10))+pdfPad(String(sc.away)+unit, 10, 'r'), mono:true, size:11, gap:3});
+  lines.push(rule('='));
+  if(sc.home===sc.away) lines.push({t:'DRAW', bold:true, size:12, gap:6});
+  else lines.push({t:pdfSafe((sc.home>sc.away?hn:an)+' win by '+Math.abs(sc.home-sc.away)+unit), bold:true, size:12, gap:6});
+  if(sc.mode!=='pins') lines.push({t:'Pins  '+sc.pins.home+' - '+sc.pins.away, size:10, gap:6});
+
+  const kind=c.quick?(fmt.id==='league'?'Quick Match':fmt.name+' cup'):('Week '+c.week);
+  lines.push({t:pdfSafe(kind)+'  |  '+pdfSafe(fmtDate(c.date)), size:10, gap:2});
+  const ven=venueOf(home.div,home.num);
+  if(ven) lines.push({t:pdfSafe(ven), size:9, gap:2});
   if(c.status==='submitted' && c.submittedAt){
-    lines.push({t:'Submitted '+new Date(c.submittedAt).toLocaleString('en-GB')+(c.by?' by '+c.by:''), size:10, gap:10});
+    lines.push({t:'Submitted '+pdfSafe(new Date(c.submittedAt).toLocaleString('en-GB'))+(c.by?' by '+pdfSafe(c.by):''), size:9, gap:10});
   } else {
-    lines.push({t:'Draft card · saved on this phone'+(c.savedAt?' · '+c.savedAt:''), size:10, gap:10});
+    lines.push({t:'Draft - saved on this phone'+(c.savedAt?' - '+pdfSafe(c.savedAt):''), size:9, gap:10});
   }
+
   ['home','away'].forEach(side=>{
     const list=c.players[side], tot=teamPins(list), nm=sideName(c,side);
     const ct=colTotals(c,list), ups=pinsUp(c,list);
-    lines.push({t:(side==='home'?'HOME':'AWAY')+' · '+nm+' · pins '+tot, bold:true, size:12, gap:8});
-    const hdr='Player          '+Array.from({length:fmt.rubs},(_,i)=>('  B'+(i+1)).slice(-3)).join(' ')+'   Tot';
-    lines.push({t:hdr, size:9, gap:2});
+    lines.push({t:(side==='home'?'HOME':'AWAY')+'  '+pdfSafe(nm), bold:true, size:11, gap:2});
+    lines.push({t:'Pins total  '+tot, size:10, gap:4});
+    lines.push(rule('-'));
+    lines.push(hdr);
+    lines.push(rule('-'));
     list.forEach(p=>{
-      const label=playerLabel(p);
-      const boxes=p.boxes.map(v=>v===null?'-':String(v)).map(x=>('   '+x).slice(-3)).join(' ');
-      const name=(pdfSafe(label)+'                ').slice(0,14);
-      lines.push({t:name+' '+boxes+'  '+(p.name?('   '+pinsOf(p)).slice(-3):'  -'), size:10, mono:true});
+      lines.push(rowPlayer(playerLabel(p), p.boxes, p.name?pinsOf(p):null));
     });
+    lines.push(rule('-'));
     if(formatUsesPairRubs(c)){
-      lines.push({t:'Rub Score: '+ups.join(' · '), size:10, gap:2});
-      lines.push({t:'Each rub: '+ct.join(' · '), size:10, gap:10});
+      // Show paired rub scores under the grid (3 values for 6 rubs)
+      let rubLine=pdfPad('Rub score', nameW);
+      ups.forEach(x=>{ rubLine+=pdfPad(x||'-', colW*2, 'r'); });
+      lines.push({t:rubLine.slice(0, tableW), mono:true, size:8, gap:2});
+      lines.push(rowPlayer('Each rub', ct, tot));
     } else {
-      lines.push({t:'Rub Score: '+ups.join(' · '), size:10, gap:10});
+      lines.push(rowPlayer('Rub score', ups, tot));
     }
+    lines.push({t:' ', size:8, gap:8});
   });
-  if(fmt.scoring==='mfm-rub'){
-    lines.push({t:'Man for Man (each rub vs opposite number): '+sc.home+' – '+sc.away+' (max '+fmt.maxScore+')', bold:true, size:10, gap:4});
-    if(fmt.id==='western-counties'){
-      lines.push({t:'Play order: rubs played 2 at a time throughout (no final-rubs head-to-head order).', size:9, gap:6});
-    }
-  } else if(fmt.scoring==='mfm-total'){
-    lines.push({t:'Man for Man (highest total vs opposite number): '+sc.home+' – '+sc.away+' (best of '+fmt.maxScore+')', bold:true, size:10, gap:6});
-  }
-  lines.push({t:'Generated by Skittles Scorer on this phone.', size:9, gap:8});
+
+  lines.push({t:'Skittles Scorer', size:8, gap:2});
   return lines;
 }
 function buildMatchPdf(c){
-  const pageW=595, pageH=842, margin=48;
+  // Portrait A4
+  const pageW=595, pageH=842, margin=40;
   const lines=matchPdfLines(c);
   const pages=[];
   let y=pageH-margin, buf=[];
   const flush=()=>{ pages.push(buf); buf=[]; y=pageH-margin; };
   lines.forEach(line=>{
-    const size=line.size||11, gap=line.gap||4, need=size+gap;
+    const size=line.size||11, gap=line.gap==null?3:line.gap, need=size+gap;
     if(y-need<margin) flush();
     buf.push({...line, y});
     y-=need;
@@ -410,7 +441,7 @@ function buildMatchPdf(c){
   pages.forEach(pageLines=>{
     let stream='BT\n';
     pageLines.forEach(L=>{
-      const font=L.bold?'/F2':(L.mono?'/F3':'/F1');
+      const font=L.mono?'/F3':(L.bold?'/F2':'/F1');
       const size=L.size||11;
       stream+=font+' '+size+' Tf\n1 0 0 1 '+margin+' '+L.y+' Tm\n('+pdfEscape(L.t)+') Tj\n';
     });
@@ -482,7 +513,7 @@ function pdfActionsHtml(c){
   if(!ready) return '';
   const label=c.status==='submitted'?'Share result PDF':'Share PDF of this result';
   return `<div class="pdf-actions">
-    <p class="muted small" style="margin:14px 0 10px">Send a PDF of the scores — works offline on this phone.</p>
+    <p class="muted small" style="margin:14px 0 10px">Portrait PDF with the result at the top — made for sharing or screenshots.</p>
     <button class="btn block" data-a="share-pdf">${label}</button>
     <button class="btn quiet block" data-a="download-pdf" style="margin-top:8px">Download PDF</button>
   </div>`;
