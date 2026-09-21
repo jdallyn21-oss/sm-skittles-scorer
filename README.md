@@ -25,9 +25,11 @@ You can also serve the folder with any static server, for example:
 python3 -m http.server 43127
 ```
 
-## Demo PIN
+## Team logins
 
-The in-app demo PIN is `1234`.
+Each team has its own 4-digit PIN (from the league team-logins list). On the login screen, pick the team, then enter that team’s PIN. Shared demo PIN `1234` is no longer accepted.
+
+Login short names (for example `COLT`, `FARM`) are stored in seed data with each PIN for reference; the UI uses the team dropdown + PIN.
 
 ## Deploy notes
 

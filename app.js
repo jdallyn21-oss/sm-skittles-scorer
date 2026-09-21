@@ -1,7 +1,6 @@
 (function(){
 'use strict';
 const SEED = window.SEED;
-const DEMO_PIN = '1234';
 const NBOX = 6, NSLOT = 8, MAXBOX = 27;
 const $app = document.getElementById('app');
 
@@ -176,9 +175,9 @@ function loginView(){
     `<button data-a="pinback" aria-label="Delete">⌫</button><button data-a="pin" data-k="0">0</button><span></span>`;
   return `<div class="wrap">
     ${installCard()}
-    <div class="banner demo">Test build. Every team's PIN is 1234 for now, and results stay on this phone until the league database is connected.</div>
+    <div class="banner demo">Results stay on this phone until the league database is connected.</div>
     <h2>Log in to score</h2>
-    <p class="muted">Pick your team, then enter your PIN.</p>
+    <p class="muted">Pick your team, then enter your 4-digit team PIN.</p>
     <label class="field" for="teamSel">Your team</label>
     <select id="teamSel">${opts}</select>
     <div class="pin" aria-label="PIN entered: ${ui.pin.length} of 4">${dots}</div>
@@ -413,7 +412,8 @@ function addPlayer(name){
 function tryLogin(){
   if(!ui.teamSel){ ui.pinMsg='Choose your team first.'; ui.pin=''; render(); return; }
   if(ui.tries>=5){ ui.pinMsg='Too many wrong tries. Ask the league organiser to reset your PIN.'; ui.pin=''; render(); return; }
-  if(ui.pin===DEMO_PIN){
+  const cred=SEED.logins && SEED.logins[ui.teamSel];
+  if(cred && ui.pin===cred.pin){
     const [d,n]=ui.teamSel.split('-').map(Number); session={div:d,num:n}; kvSave('session',session); requestPersist();
     ui.pin=''; ui.pinMsg=''; ui.tries=0; ui.screen='fixtures'; render(); window.scrollTo(0,0);
   } else { ui.tries++; ui.pin=''; ui.pinMsg='That PIN is not right. Try again.'; render(); }

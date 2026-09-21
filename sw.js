@@ -1,5 +1,5 @@
 /* Skittles Scorer service worker. Keeps the whole app on the phone so it opens with no signal. */
-const VERSION = 'f6f450db09';
+const VERSION = 'team-logins-01';
 const CACHE = 'skittles-' + VERSION;
 const SHELL = [
  "./",
