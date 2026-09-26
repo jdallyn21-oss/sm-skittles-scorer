@@ -1,5 +1,5 @@
 /* Skittles Scorer service worker. Keeps the whole app on the phone so it opens with no signal. */
-const VERSION = 'supabase-admin-config-02';
+const VERSION = 'vercel-config-inject-01';
 const CACHE = 'skittles-' + VERSION;
 const SHELL = [
  "./",

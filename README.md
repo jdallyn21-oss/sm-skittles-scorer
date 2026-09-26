@@ -48,12 +48,18 @@ Then choose home or away and the opposing team. Cards list under **Your Quick Ma
 
 On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. The PDF keeps the card’s line up and uses **Rub Score** (then Each rub, when double rubs) to match the board.
 
+## Live URL
+
+**Production (intended):** [https://sm-skittles-scorer.vercel.app](https://sm-skittles-scorer.vercel.app)  
+GitHub homepage is set to that URL. If it 404s, redeploy from Vercel and ensure the Production domain is assigned. Turn **off** Vercel Deployment Protection for Production so phones can open the app without a Vercel login.
+
 ## Supabase (shared team data) — admin deploy
 
-Scorers only enter a **team PIN**. Backend config is maintainer-only in **`config.js`** (see `config.example.js`):
+Scorers only enter a **team PIN**. Backend config is maintainer-only:
 
 - Default URL: `https://dtctorijynmcdjtzmgnk.supabase.co`
-- Paste the **anon** key into `config.js` once, then redeploy (never `service_role` / DB password)
+- **Vercel (preferred):** Project → Settings → Environment Variables → `SUPABASE_URL` + `SUPABASE_ANON_KEY` (anon public JWT). Build runs `npm run build` → `scripts/inject-config.js` writes `config.js`. Plain static JS cannot read Vercel env at runtime without this inject.
+- **Or** paste the anon key into committed `config.js` (never `service_role` / DB password)
 - Run SQL in `supabase/migrations/` then `supabase/seed_teams.sql` in the Supabase SQL editor (Joe only)
 
 ## League site sync (optional, after Supabase)

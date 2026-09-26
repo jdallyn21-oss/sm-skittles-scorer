@@ -1,6 +1,7 @@
 /* Skittles Scorer — deploy / admin config template (Joe only).
  *
- * Copy to config.js (or edit config.js directly), fill supabaseAnonKey, redeploy.
+ * Prefer Vercel env: SUPABASE_URL + SUPABASE_ANON_KEY (build injects into config.js).
+ * Or copy to config.js and fill supabaseAnonKey, then redeploy.
  * Players never configure anything — team PIN login only.
  *
  * Anon key: Supabase Dashboard → Project Settings → API → anon public
