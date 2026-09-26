@@ -50,8 +50,8 @@ On a completed match card (submitted, or fully ready to submit), use **Share res
 
 ## Live URL
 
-**Production (intended):** [https://sm-skittles-scorer.vercel.app](https://sm-skittles-scorer.vercel.app)  
-GitHub homepage is set to that URL. If it 404s, redeploy from Vercel and ensure the Production domain is assigned. Turn **off** Vercel Deployment Protection for Production so phones can open the app without a Vercel login.
+**Production:** [https://skittlescorer.vercel.app](https://skittlescorer.vercel.app/)  
+If it 404s (`DEPLOYMENT_NOT_FOUND`), the last Production deploy failed or the domain is unassigned — fix `vercel.json` `outputDirectory`, redeploy `main`, and ensure domain `skittlescorer.vercel.app` is on the project. Turn **off** Deployment Protection for Production so phones can open without a Vercel login.
 
 ## Supabase (shared team data) — admin deploy
 
