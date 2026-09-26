@@ -1,9 +1,10 @@
 /* Skittles Scorer service worker. Keeps the whole app on the phone so it opens with no signal. */
-const VERSION = 'supabase-team-sync-01';
+const VERSION = 'supabase-admin-config-01';
 const CACHE = 'skittles-' + VERSION;
 const SHELL = [
  "./",
  "./app.js",
+ "./config.js",
  "./fonts/patrick-hand-latin-400-normal.woff2",
  "./fonts/rye-latin-400-normal.woff2",
  "./fonts/work-sans-latin-400-normal.woff2",

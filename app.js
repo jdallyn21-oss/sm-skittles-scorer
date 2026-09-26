@@ -86,18 +86,29 @@ function revokeSigURLs(key){
   delete sigURLs[key];
 }
 
-// League cards API — default is local/dev; override in settings (never assume only localhost in prod)
+// Backend + match defaults: admin/deploy only via config.js (window.SKITTLES_CONFIG).
+// Scorers only enter a team PIN — no URL/key/API setup in the normal flow.
 const LEAGUE_DEFAULT_BASE = 'http://127.0.0.1:47331';
 const LEAGUE_DAILY_CAP = 100; // host deploy/write budget — pair cadence stays under this
-// Public REST API only (never connect to db.*.supabase.co:5432 from the PWA)
 const SUPABASE_DEFAULT_URL = 'https://dtctorijynmcdjtzmgnk.supabase.co';
-let settings = {
-  rubs:2, fines:false,
-  leagueSync:false, leagueBaseUrl:LEAGUE_DEFAULT_BASE, // league /api/cards after Supabase
-  supabaseSync:false,
-  supabaseUrl:SUPABASE_DEFAULT_URL, // project ref dtctorijynmcdjtzmgnk — anon key still required
-  supabaseAnonKey:''    // anon/public key only — never service_role or DB password
-};
+function deployConfig(){
+  return (typeof window!=='undefined' && window.SKITTLES_CONFIG) || {};
+}
+function deploySupabase(){
+  const c=deployConfig();
+  const url=String(c.supabaseUrl||SUPABASE_DEFAULT_URL).trim().replace(/\/+$/,'')||SUPABASE_DEFAULT_URL;
+  const anonKey=String(c.supabaseAnonKey||'').trim();
+  return {url, anonKey};
+}
+function applyDeploySettings(){
+  const c=deployConfig();
+  if(c.rubs===1||c.rubs===2) settings.rubs=c.rubs;
+  if(typeof c.fines==='boolean') settings.fines=c.fines;
+}
+function isAdminMode(){
+  try{ return new URLSearchParams(location.search||'').has('admin'); }catch(e){ return false; }
+}
+let settings = { rubs:2, fines:false };
 let session  = null;      // {div,num,pin,teamKey}
 let cards    = {};        // by fixture key
 let extra    = {};        // players added on the phone
@@ -359,13 +370,12 @@ function exportJSON(c){
 
 /* ---------- league site sync: end of each rub pair/group (not per box) ---------- */
 function leagueBaseUrl(){
-  const fromWin=(typeof window!=='undefined' && window.LEAGUE_API_BASE)?String(window.LEAGUE_API_BASE).trim():'';
-  const fromSet=(settings.leagueBaseUrl||'').trim();
-  const raw=fromWin||fromSet||LEAGUE_DEFAULT_BASE;
+  const c=deployConfig();
+  const raw=String(c.leagueBaseUrl||LEAGUE_DEFAULT_BASE).trim()||LEAGUE_DEFAULT_BASE;
   return raw.replace(/\/+$/,'');
 }
 function leagueCardsUrl(){ return leagueBaseUrl()+'/api/cards'; }
-function leagueSyncEnabled(){ return !!settings.leagueSync && !!leagueBaseUrl(); }
+function leagueSyncEnabled(){ return !!deployConfig().leagueSync && !!leagueBaseUrl(); }
 function isRubGroupComplete(c, groupBoxes){
   return ['home','away'].every(side=>{
     const named=c.players[side].filter(p=>p.name);
@@ -501,7 +511,7 @@ async function flushLeagueSyncQueue(){
   }
 }
 function leagueSyncStatusHtml(){
-  if(!settings.leagueSync) return '';
+  if(!leagueSyncEnabled()) return '';
   const base=leagueBaseUrl();
   let line='League sync → '+esc(base)+'/api/cards';
   if(syncUi.pending) line+=' · '+syncUi.pending+' waiting';
@@ -512,16 +522,17 @@ function leagueSyncStatusHtml(){
 
 /* ---------- Supabase shared team sync (PIN-gated RPCs; offline-first) ---------- */
 function supabaseConfigured(){
-  const url=(settings.supabaseUrl||'').trim();
-  const key=(settings.supabaseAnonKey||'').trim();
-  return !!(url && key && !url.includes('YOUR_PROJECT') && !key.includes('YOUR_ANON'));
+  const {url, anonKey}=deploySupabase();
+  if(!url || !anonKey) return false;
+  if(anonKey.includes('PASTE_ANON') || anonKey.includes('YOUR_ANON')) return false;
+  return anonKey.length > 20;
 }
-function supabaseEnabled(){ return !!settings.supabaseSync && supabaseConfigured() && session && session.pin; }
+function supabaseEnabled(){ return supabaseConfigured() && session && session.pin; }
 function supabaseRpcUrl(fn){
-  return String(settings.supabaseUrl).replace(/\/+$/,'')+'/rest/v1/rpc/'+fn;
+  return deploySupabase().url+'/rest/v1/rpc/'+fn;
 }
 async function supabaseRpc(fn, body){
-  const key=settings.supabaseAnonKey.trim();
+  const key=deploySupabase().anonKey;
   const res=await fetch(supabaseRpcUrl(fn),{
     method:'POST',
     headers:{
@@ -697,21 +708,6 @@ async function pullSupabaseTeamData(){
     sbUi.pulling=false;
   }
 }
-function supabaseStatusHtml(){
-  if(!settings.supabaseSync){
-    return `<p class="muted small" style="margin:8px 0 0">Supabase sync is off. Turn it on and paste your project URL + anon key so teammates share cards.</p>`;
-  }
-  if(!supabaseConfigured()){
-    return `<p class="muted small" style="margin:8px 0 0">Add your Supabase project URL and <b>anon</b> key below (see <code>docs</code> / supabase-sync). Placeholders will not sync.</p>`;
-  }
-  let line='Supabase · team data';
-  if(sbUi.pulling) line+=' · pulling…';
-  if(sbUi.pending) line+=' · '+sbUi.pending+' waiting';
-  else if(sbUi.lastOk) line+=' · last ok '+esc(String(sbUi.lastOk).slice(11,19));
-  if(sbUi.lastErr) line+=' · '+esc(sbUi.lastErr);
-  return `<p class="muted small" style="margin:8px 0 0">${line}</p>`;
-}
-
 /* ---------- result PDF (offline, no library) ---------- */
 function pdfSafe(s){
   // Helvetica here is ASCII/WinAnsi-safe ASCII only — map common punctuation so PDFs
@@ -1206,7 +1202,7 @@ function loginView(){
     `<button data-a="pinback" aria-label="Delete">⌫</button><button data-a="pin" data-k="0">0</button><span></span>`;
   return `<div class="wrap">
     ${installCard()}
-    <div class="banner demo">${settings.supabaseSync&&supabaseConfigured()?'Team cards sync via Supabase after login (when online).':(settings.supabaseSync?'Add Supabase URL + anon key in League settings to share team data.':'Turn on Supabase sync in League settings so teammates see the same cards.')}</div>
+    ${supabaseConfigured()?'<div class="banner demo">Team cards sync across phones after login when you are online.</div>':''}
     <h2>Log in to score</h2>
     <p class="muted">Pick your team, then enter your 4-digit team PIN.</p>
     <label class="field" for="teamSel">Your team</label>
@@ -1214,42 +1210,25 @@ function loginView(){
     <div class="pin" aria-label="PIN entered: ${ui.pin.length} of 4">${dots}</div>
     <div class="err" role="alert">${esc(ui.pinMsg)}</div>
     <div class="numpad">${keys}</div>
-    <p style="text-align:center;margin-top:18px"><button class="linkbtn" data-a="settings">League settings</button></p>
+    ${isAdminMode()?'<p style="text-align:center;margin-top:18px"><button class="linkbtn" data-a="settings">Admin</button></p>':''}
   </div>`;
 }
 function settingsView(){
+  // Hidden admin only (?admin=1). Scorers never see this in the normal PIN flow.
   const r=settings.rubs;
-  const url=settings.leagueBaseUrl||LEAGUE_DEFAULT_BASE;
-  const sbUrl=settings.supabaseUrl||'';
-  const sbKey=settings.supabaseAnonKey||'';
+  const sb=deploySupabase();
+  const leagueOn=leagueSyncEnabled();
   return `<div class="wrap">
     <button class="back" data-a="leave-settings">‹ Back</button>
-    <h2 style="margin-top:16px">League settings</h2>
-    <p class="muted">These are set once for the whole league by the organiser.</p>
-    <button class="radio ${r===2?'on':''}" data-a="rubs" data-v="2"><span class="dot"></span><span><b>Double rubs</b><br><span class="muted small">Boxes are played in pairs. Rub Score is shown after each pair. South Molton plays this way.</span></span></button>
-    <button class="radio ${r===1?'on':''}" data-a="rubs" data-v="1"><span class="dot"></span><span><b>Single rubs</b><br><span class="muted small">Each box is its own rub. Rub Score is shown after every box.</span></span></button>
-    <button class="radio ${settings.fines?'on':''}" data-a="fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Adds a Fine button to the keypad. A notch shows in the corner of the box. It never changes the score.</span></span></button>
-
-    <h3 style="margin:22px 0 8px;font-size:18px">Supabase (shared team data)</h3>
-    <p class="muted small" style="margin:0 0 10px">Teammates who log in with the same team PIN pull and push match cards across phones. Use the <b>anon</b> key only — never the service role. Run the SQL in <code>supabase/migrations/</code> first.</p>
-    <button class="radio ${settings.supabaseSync?'on':''}" data-a="supabase-sync"><span class="dot"></span><span><b>Sync via Supabase</b><br><span class="muted small">Pull on login; upsert on save. Works offline with a queue.</span></span></button>
-    <label class="field" for="supabaseUrl">Supabase project URL</label>
-    <input type="url" id="supabaseUrl" value="${esc(sbUrl||SUPABASE_DEFAULT_URL)}" placeholder="${esc(SUPABASE_DEFAULT_URL)}" autocomplete="off" spellcheck="false">
-    <label class="field" for="supabaseAnonKey" style="margin-top:10px">Supabase anon (public) key</label>
-    <input type="text" id="supabaseAnonKey" value="${esc(sbKey)}" placeholder="Paste anon key from Project Settings → API" autocomplete="off" spellcheck="false">
-    <p class="muted small" style="margin:8px 0 0">Project <code>dtctorijynmcdjtzmgnk</code>. Get the <b>anon</b> <code>public</code> key in the Supabase dashboard (Settings → API). Do <b>not</b> paste the service_role key or the database password.</p>
-    ${supabaseStatusHtml()}
-    <button class="btn quiet block" data-a="supabase-pull" style="margin-top:12px" ${supabaseConfigured()&&session&&session.pin?'':'disabled'}>Pull team data now</button>
-    <button class="btn quiet block" data-a="supabase-flush" style="margin-top:8px">Retry waiting Supabase syncs</button>
-
-    <h3 style="margin:22px 0 8px;font-size:18px">League site API (later)</h3>
-    <p class="muted small" style="margin:0 0 10px">Optional <code>/api/cards</code> push after rub pairs. Prefer Supabase for shared scoring first.</p>
-    <button class="radio ${settings.leagueSync?'on':''}" data-a="league-sync"><span class="dot"></span><span><b>Sync to league site</b><br><span class="muted small">POST JSON to <code>/api/cards</code> when a pair completes.</span></span></button>
-    <label class="field" for="leagueBaseUrl">API base URL (no trailing slash)</label>
-    <input type="url" id="leagueBaseUrl" value="${esc(url)}" placeholder="${esc(LEAGUE_DEFAULT_BASE)}" autocomplete="off" spellcheck="false">
-    <p class="muted small" style="margin:8px 0 0">Cards endpoint: <code>${esc(leagueCardsUrl())}</code>.</p>
-    ${leagueSyncStatusHtml()}
-    <button class="btn quiet block" data-a="league-flush" style="margin-top:12px">Retry waiting league syncs</button>
+    <h2 style="margin-top:16px">Admin</h2>
+    <p class="muted small">Maintainer only. Backend keys live in <code>config.js</code> — not on this screen. Scorers only use a team PIN.</p>
+    <p class="muted small" style="margin:10px 0">Supabase: ${supabaseConfigured()?'configured ('+esc(sb.url)+')':'not configured — paste anon key in config.js'} · pending ${sbUi.pending||0}</p>
+    <p class="muted small" style="margin:0 0 14px">League API: ${leagueOn?'on → '+esc(leagueCardsUrl()):'off (set leagueSync in config.js)'} · pending ${syncUi.pending||0}</p>
+    <button class="radio ${r===2?'on':''}" data-a="rubs" data-v="2"><span class="dot"></span><span><b>Double rubs</b><br><span class="muted small">Boxes in pairs (South Molton).</span></span></button>
+    <button class="radio ${r===1?'on':''}" data-a="rubs" data-v="1"><span class="dot"></span><span><b>Single rubs</b><br><span class="muted small">Each box is its own rub.</span></span></button>
+    <button class="radio ${settings.fines?'on':''}" data-a="fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Fine button on the keypad (display only).</span></span></button>
+    <button class="btn quiet block" data-a="league-flush" style="margin-top:16px">Retry league queue</button>
+    <button class="btn quiet block" data-a="supabase-flush" style="margin-top:8px">Retry Supabase queue</button>
   </div>`;
 }
 function fixturesView(){
@@ -1407,7 +1386,7 @@ function cardView(){
   h+=`<div class="strip" aria-live="polite"><div class="row">
       <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
       <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
-      <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${settings.leagueSync&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
+      <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
     <section class="card finish"><h2>Finish the match</h2>
@@ -1589,10 +1568,11 @@ document.addEventListener('click',e=>{
   switch(a){
     case 'pin': if(ui.pin.length<4){ ui.pin+=D.k; ui.pinMsg=''; render(); if(ui.pin.length===4) setTimeout(tryLogin,150); } break;
     case 'pinback': ui.pin=ui.pin.slice(0,-1); render(); break;
-    case 'settings': ui.screen='settings'; render(); break;
+    case 'settings': if(!isAdminMode()) break; ui.screen='settings'; render(); break;
     case 'leave-settings': ui.screen=session?'fixtures':'login'; render(); break;
-    case 'rubs': settings.rubs=+D.v; kvSave('settings',settings); render(); break;
-    case 'fines': settings.fines=!settings.fines; kvSave('settings',settings); render(); break;
+    case 'rubs': if(!isAdminMode()) break; settings.rubs=+D.v; kvSave('settings',settings); render(); break;
+    case 'fines': if(!isAdminMode()) break; settings.fines=!settings.fines; kvSave('settings',settings); render(); break;
+    case 'supabase-flush': if(!isAdminMode()) break; flushSupabaseQueue().then(()=>render()); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
     case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; render(); break;
@@ -1656,12 +1636,7 @@ document.addEventListener('click',e=>{
     case 'submit': { const c=curCard(); if(checkCard(c).blockers.length) break;
       c.status='submitted'; c.submittedAt=new Date().toISOString(); c.by=teamName(session.div,session.num); persist(c.key);
       queueFinalMatchSync(c).catch(()=>{}); ui.sel=null; render(); window.scrollTo(0,0); break; }
-    case 'league-sync': settings.leagueSync=!settings.leagueSync; kvSave('settings',settings); render(); if(settings.leagueSync) flushLeagueSyncQueue(); break;
-    case 'league-flush': flushLeagueSyncQueue().then(()=>render()); break;
-    case 'supabase-sync': settings.supabaseSync=!settings.supabaseSync; kvSave('settings',settings); render();
-      if(settings.supabaseSync){ pullSupabaseTeamData().then(()=>render()); flushSupabaseQueue(); } break;
-    case 'supabase-pull': pullSupabaseTeamData().then(()=>render()); break;
-    case 'supabase-flush': flushSupabaseQueue().then(()=>render()); break;
+    case 'league-flush': if(!isAdminMode()) break; flushLeagueSyncQueue().then(()=>render()); break;
     case 'edit': { const c=curCard(); c.status='draft'; persist(c.key); render(); break; }
     case 'share-pdf': { const c=curCard(); if(c) shareMatchPdf(c); break; }
     case 'download-pdf': { const c=curCard(); if(c) downloadMatchPdf(c); break; }
@@ -1672,20 +1647,6 @@ document.addEventListener('change',e=>{
   if(e.target.id==='teamSel'){ ui.teamSel=e.target.value; ui.pinMsg=''; }
   if(e.target.id==='qmOpp'){ ui.qmOpp=e.target.value; ui.qmMsg=''; render(); }
   if(e.target.id==='qmFormat'){ ui.qmFormat=e.target.value; ui.qmMsg=''; render(); }
-  if(e.target.id==='leagueBaseUrl'){
-    const v=e.target.value.trim().replace(/\/+$/,'')||LEAGUE_DEFAULT_BASE;
-    settings.leagueBaseUrl=v; kvSave('settings',settings); render();
-  }
-  if(e.target.id==='supabaseUrl'){
-    settings.supabaseUrl=e.target.value.trim().replace(/\/+$/,'');
-    kvSave('settings',settings); try{ localStorage.setItem('skittles.supabaseUrl',settings.supabaseUrl); }catch(err){}
-    render();
-  }
-  if(e.target.id==='supabaseAnonKey'){
-    settings.supabaseAnonKey=e.target.value.trim();
-    kvSave('settings',settings); try{ localStorage.setItem('skittles.supabaseAnonKey',settings.supabaseAnonKey); }catch(err){}
-    render();
-  }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
     compressBlob(e.target.files[0])
@@ -1715,19 +1676,22 @@ async function init(){
   try{
     const kv=await idbAll('kv');
     if(kv.settings) settings=Object.assign(settings,kv.settings);
-    if(!settings.leagueBaseUrl) settings.leagueBaseUrl=LEAGUE_DEFAULT_BASE;
-    if(!settings.supabaseUrl) settings.supabaseUrl=SUPABASE_DEFAULT_URL;
-    // Optional overrides: query params, window.*, localStorage
+    // Backend never lives in per-device settings — config.js is the only source
+    delete settings.supabaseSync;
+    delete settings.supabaseUrl;
+    delete settings.supabaseAnonKey;
+    delete settings.leagueSync;
+    delete settings.leagueBaseUrl;
+    applyDeploySettings();
+    // Admin ?admin=1 may override rubs/fines on this phone after deploy defaults apply;
+    // re-read device overrides only when admin mode is on
+    if(isAdminMode() && kv.settings){
+      if(kv.settings.rubs===1||kv.settings.rubs===2) settings.rubs=kv.settings.rubs;
+      if(typeof kv.settings.fines==='boolean') settings.fines=kv.settings.fines;
+    }
     try{
-      const q=new URLSearchParams(location.search||'');
-      const lb=q.get('leagueBase'); if(lb) settings.leagueBaseUrl=lb.trim().replace(/\/+$/,'');
-      const su=q.get('supabaseUrl')||(window.SKITTLES_SUPABASE_URL||'');
-      const sk=q.get('supabaseAnon')||(window.SKITTLES_SUPABASE_ANON_KEY||'');
-      if(su) settings.supabaseUrl=String(su).trim().replace(/\/+$/,'');
-      if(sk) settings.supabaseAnonKey=String(sk).trim();
-      if(!settings.supabaseUrl){ const ls=localStorage.getItem('skittles.supabaseUrl'); if(ls) settings.supabaseUrl=ls; }
-      if(!settings.supabaseAnonKey){ const ls=localStorage.getItem('skittles.supabaseAnonKey'); if(ls) settings.supabaseAnonKey=ls; }
-      if(lb||su||sk) kvSave('settings',settings);
+      localStorage.removeItem('skittles.supabaseUrl');
+      localStorage.removeItem('skittles.supabaseAnonKey');
     }catch(e){}
     session=kv.session||null; extra=kv.extraRoster||{};
     // Older sessions lack pin — Supabase sync needs a fresh login
