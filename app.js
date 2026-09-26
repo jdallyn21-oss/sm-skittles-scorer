@@ -411,24 +411,43 @@ function matchPdfLines(c){
     lines.push({t:' ', size:8, gap:8});
   });
 
+  // Blank labeled boxes for pen / stylus / screenshot — no on-screen signing UI
+  lines.push({t:'CAPTAIN SIGNATURES', bold:true, size:11, gap:6});
+  lines.push({
+    sigBoxes:[
+      {title:'HOME CAPTAIN', team:hn},
+      {title:'AWAY CAPTAIN', team:an}
+    ],
+    gap:10
+  });
+
   lines.push({t:'Skittles Scorer', size:8, gap:2});
   return lines;
 }
 function buildMatchPdf(c){
   // Portrait A4
   const pageW=595, pageH=842, margin=40;
+  const contentW=pageW-margin*2;
+  const sigBoxH=72, sigLabelH=12, sigTeamH=10, sigBlockH=sigLabelH+sigTeamH+4+sigBoxH+14;
   const lines=matchPdfLines(c);
   const pages=[];
   let y=pageH-margin, buf=[];
   const flush=()=>{ pages.push(buf); buf=[]; y=pageH-margin; };
   lines.forEach(line=>{
+    if(line.sigBoxes){
+      const need=sigBlockH+(line.gap==null?10:line.gap);
+      if(y-need<margin) flush();
+      buf.push({...line, y, kind:'sig'});
+      y-=need;
+      return;
+    }
     const size=line.size||11, gap=line.gap==null?3:line.gap, need=size+gap;
     if(y-need<margin) flush();
-    buf.push({...line, y});
+    buf.push({...line, y, kind:'text'});
     y-=need;
   });
   if(buf.length) flush();
-  if(!pages.length) pages.push([{t:'No scores yet', y:pageH-margin, size:12}]);
+  if(!pages.length) pages.push([{t:'No scores yet', y:pageH-margin, size:12, kind:'text'}]);
 
   const objects=[];
   const obj=body=>{ objects.push(body); return objects.length; };
@@ -439,13 +458,30 @@ function buildMatchPdf(c){
   const font3=obj('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
   const pageIds=[];
   pages.forEach(pageLines=>{
-    let stream='BT\n';
+    let graphics='', text='BT\n';
     pageLines.forEach(L=>{
+      if(L.kind==='sig' && L.sigBoxes){
+        const gapX=16;
+        const boxW=Math.floor((contentW-gapX)/2);
+        L.sigBoxes.forEach((box,i)=>{
+          const x=margin+i*(boxW+gapX);
+          const titleY=L.y;
+          const teamY=titleY-sigLabelH-2;
+          const boxBottom=teamY-sigTeamH-4-sigBoxH;
+          text+='/F2 9 Tf\n1 0 0 1 '+x+' '+titleY+' Tm\n('+pdfEscape(box.title)+') Tj\n';
+          text+='/F1 8 Tf\n1 0 0 1 '+x+' '+teamY+' Tm\n('+pdfEscape(box.team)+') Tj\n';
+          // Empty signature rectangle for pen / stylus / screenshot
+          graphics+='0.9 w\n'+x+' '+boxBottom+' '+boxW+' '+sigBoxH+' re S\n';
+          text+='/F1 7 Tf\n1 0 0 1 '+(x+6)+' '+(boxBottom+sigBoxH-12)+' Tm\n('+pdfEscape('Sign here')+') Tj\n';
+        });
+        return;
+      }
       const font=L.mono?'/F3':(L.bold?'/F2':'/F1');
       const size=L.size||11;
-      stream+=font+' '+size+' Tf\n1 0 0 1 '+margin+' '+L.y+' Tm\n('+pdfEscape(L.t)+') Tj\n';
+      text+=font+' '+size+' Tf\n1 0 0 1 '+margin+' '+L.y+' Tm\n('+pdfEscape(L.t)+') Tj\n';
     });
-    stream+='ET';
+    text+='ET';
+    const stream=(graphics?graphics:'')+text;
     const contentId=obj('<< /Length '+stream.length+' >>\nstream\n'+stream+'\nendstream');
     pageIds.push(obj('<< /Type /Page /Parent '+pagesId+' 0 R /MediaBox [0 0 '+pageW+' '+pageH+'] /Contents '+contentId+' 0 R /Resources << /Font << /F1 '+font1+' 0 R /F2 '+font2+' 0 R /F3 '+font3+' 0 R >> >> >>'));
   });
