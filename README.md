@@ -48,13 +48,17 @@ Then choose home or away and the opposing team. Cards list under **Your Quick Ma
 
 On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. The PDF keeps the card’s line up and uses **Rub Score** (then Each rub, when double rubs) to match the board.
 
-## Supabase (shared team data)
+## Supabase (shared team data) — admin deploy
 
-Teammates share match cards across phones via Supabase REST RPCs + team PIN. Default project URL: `https://dtctorijynmcdjtzmgnk.supabase.co`. Paste the **anon** key in **League settings** (never `service_role` or the DB password). Run SQL in `supabase/migrations/` then `supabase/seed_teams.sql`. Details: ask the organiser / see agent docs `supabase-sync.md`.
+Scorers only enter a **team PIN**. Backend config is maintainer-only in **`config.js`** (see `config.example.js`):
+
+- Default URL: `https://dtctorijynmcdjtzmgnk.supabase.co`
+- Paste the **anon** key into `config.js` once, then redeploy (never `service_role` / DB password)
+- Run SQL in `supabase/migrations/` then `supabase/seed_teams.sql` in the Supabase SQL editor (Joe only)
 
 ## League site sync (optional, after Supabase)
 
-When **Sync to league site** is on, completing a rub **pair** enqueues a `POST` to `{base}/api/cards` (default `http://127.0.0.1:47331`). Cap: 100 successful POSTs per day.
+Also admin-only via `config.js` (`leagueSync`, `leagueBaseUrl`). When enabled, completing a rub **pair** enqueues `POST {base}/api/cards`. Cap: 100 POSTs/day.
 
 ## Deploy notes
 
