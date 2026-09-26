@@ -1,0 +1,31 @@
+-- Seed teams/PINs to match seed.js logins (same data already shipped in the PWA).
+-- Run in Supabase SQL editor AFTER the migration, or: supabase db execute -f supabase/seed_teams.sql
+insert into public.teams (team_key, pin, name, division, team_num) values
+  ('0-1', '7835', 'Colts', 1, 1),
+  ('0-2', '5463', 'Thirsty Farmers', 1, 2),
+  ('0-3', '3258', 'Heasley Mill B', 1, 3),
+  ('0-4', '9901', 'Young Guns', 1, 4),
+  ('0-5', '0371', 'Bell Hotel', 1, 5),
+  ('0-6', '5071', 'Sundowners', 1, 6),
+  ('0-7', '4662', 'Shafters', 1, 7),
+  ('0-8', '2536', 'NMSC', 1, 8),
+  ('0-9', '4951', 'Thunder Bolts', 1, 9),
+  ('1-1', '2284', 'Blue Boys', 2, 1),
+  ('1-2', '0735', 'Flowers Floppers', 2, 2),
+  ('1-3', '4094', 'Masons', 2, 3),
+  ('1-4', '6884', 'Exiles', 2, 4),
+  ('1-5', '8897', 'Twitchen', 2, 5),
+  ('1-6', '5128', 'North Molton Wanderers', 2, 6),
+  ('1-7', '3706', 'Cockers', 2, 7),
+  ('1-8', '3406', 'Molland', 2, 8),
+  ('1-9', '2997', 'Trappers', 2, 9),
+  ('2-1', '8861', 'Tinkerbells', 3, 1),
+  ('2-2', '3987', 'Bray B', 3, 2),
+  ('2-3', '5328', 'Rackenford Rebels', 3, 3),
+  ('2-4', '6048', 'Mucking Fuddlers', 3, 4),
+  ('2-5', '7090', 'Jubilee Spoofers', 3, 5),
+  ('2-6', '7868', 'Rose Ash Ramblers', 3, 6),
+  ('2-7', '7660', 'Bell B', 3, 7),
+  ('2-8', '5994', 'Simonsbath Stars', 3, 8),
+  ('2-9', '7260', 'Dicks Devils', 3, 9)
+on conflict (team_key) do update set pin = excluded.pin, name = excluded.name, division = excluded.division, team_num = excluded.team_num;

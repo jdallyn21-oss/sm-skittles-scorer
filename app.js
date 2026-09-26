@@ -54,10 +54,10 @@ let dbp=null;
 function openDB(){
   return new Promise((res,rej)=>{
     if(!window.indexedDB) return rej(new Error('no indexedDB'));
-    const r=indexedDB.open(DBNAME,3);
+    const r=indexedDB.open(DBNAME,4);
     r.onupgradeneeded=()=>{
       const d=r.result;
-      ['kv','cards','photos','sigs','syncQueue'].forEach(s=>{ if(!d.objectStoreNames.contains(s)) d.createObjectStore(s); });
+      ['kv','cards','photos','sigs','syncQueue','sbQueue'].forEach(s=>{ if(!d.objectStoreNames.contains(s)) d.createObjectStore(s); });
     };
     r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
   });
@@ -89,14 +89,23 @@ function revokeSigURLs(key){
 // League cards API — default is local/dev; override in settings (never assume only localhost in prod)
 const LEAGUE_DEFAULT_BASE = 'http://127.0.0.1:47331';
 const LEAGUE_DAILY_CAP = 100; // host deploy/write budget — pair cadence stays under this
-let settings = {rubs:2, fines:false, leagueSync:true, leagueBaseUrl:LEAGUE_DEFAULT_BASE};
-let session  = null;      // {div,num}
+// Public REST API only (never connect to db.*.supabase.co:5432 from the PWA)
+const SUPABASE_DEFAULT_URL = 'https://dtctorijynmcdjtzmgnk.supabase.co';
+let settings = {
+  rubs:2, fines:false,
+  leagueSync:false, leagueBaseUrl:LEAGUE_DEFAULT_BASE, // league /api/cards after Supabase
+  supabaseSync:false,
+  supabaseUrl:SUPABASE_DEFAULT_URL, // project ref dtctorijynmcdjtzmgnk — anon key still required
+  supabaseAnonKey:''    // anon/public key only — never service_role or DB password
+};
+let session  = null;      // {div,num,pin,teamKey}
 let cards    = {};        // by fixture key
 let extra    = {};        // players added on the phone
 const photoURLs = {};     // object URLs for the stored chalkboard photos
 const sigURLs = {};       // cardKey -> {home?, away?} object URLs for captain signatures
-let syncMeta = {day:'', count:0}; // daily POST budget tracker
+let syncMeta = {day:'', count:0}; // daily league POST budget tracker
 let syncUi = {pending:0, lastOk:null, lastErr:null, flushing:false};
+let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league' };
@@ -233,10 +242,15 @@ function startQuickMatch(){
 function persist(key){
   if(key && cards[key]){
     cards[key].savedAt=timeNow();
-    idbPut('cards',key,cards[key]).then(()=>{ if(ui.msg.startsWith('This phone could not save')){ ui.msg=''; render(); } }).catch(saveFailed);
+    cards[key].cloudDirty=true;
+    idbPut('cards',key,cards[key]).then(()=>{
+      if(ui.msg.startsWith('This phone could not save')){ ui.msg=''; render(); }
+      queueSupabaseCardUpsert(key).catch(()=>{});
+    }).catch(saveFailed);
   }
 }
 const curCard = () => cards[ui.cardKey];
+function sessionTeamKey(){ return session?teamKey(session.div,session.num):''; }
 
 /* ---------- maths ---------- */
 function groupsFor(c){
@@ -494,6 +508,208 @@ function leagueSyncStatusHtml(){
   else if(syncUi.lastOk) line+=' · last sent '+esc(syncUi.lastOk.slice(11,19));
   if(syncUi.lastErr) line+=' · '+esc(syncUi.lastErr);
   return `<p class="muted small league-sync-status" style="margin:8px 0 0">${line}</p>`;
+}
+
+/* ---------- Supabase shared team sync (PIN-gated RPCs; offline-first) ---------- */
+function supabaseConfigured(){
+  const url=(settings.supabaseUrl||'').trim();
+  const key=(settings.supabaseAnonKey||'').trim();
+  return !!(url && key && !url.includes('YOUR_PROJECT') && !key.includes('YOUR_ANON'));
+}
+function supabaseEnabled(){ return !!settings.supabaseSync && supabaseConfigured() && session && session.pin; }
+function supabaseRpcUrl(fn){
+  return String(settings.supabaseUrl).replace(/\/+$/,'')+'/rest/v1/rpc/'+fn;
+}
+async function supabaseRpc(fn, body){
+  const key=settings.supabaseAnonKey.trim();
+  const res=await fetch(supabaseRpcUrl(fn),{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Accept':'application/json',
+      'apikey':key,
+      'Authorization':'Bearer '+key
+    },
+    body:JSON.stringify(body||{}),
+    mode:'cors',
+    credentials:'omit',
+    cache:'no-store'
+  });
+  const text=await res.text().catch(()=> '');
+  let data=null;
+  try{ data=text?JSON.parse(text):null; }catch(e){ data={raw:text}; }
+  if(!res.ok){
+    const msg=(data&&data.message)||(data&&data.error)||text||('HTTP '+res.status);
+    const err=new Error(String(msg));
+    err.status=res.status; err.body=data; throw err;
+  }
+  return data;
+}
+function cardParticipantKeys(c){
+  const home=sideMeta(c,'home'), away=sideMeta(c,'away');
+  return {home_team_key:teamKey(home.div,home.num), away_team_key:teamKey(away.div,away.num)};
+}
+async function blobToBase64(blob){
+  const buf=new Uint8Array(await blob.arrayBuffer());
+  let s=''; const chunk=0x8000;
+  for(let i=0;i<buf.length;i+=chunk) s+=String.fromCharCode.apply(null, buf.subarray(i, i+chunk));
+  return btoa(s);
+}
+function base64ToBlob(b64, type){
+  const bin=atob(b64);
+  const arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  return new Blob([arr],{type:type||'application/octet-stream'});
+}
+async function refreshSbPendingCount(){
+  try{
+    const all=await idbAll('sbQueue');
+    sbUi.pending=Object.values(all).filter(j=>j&&j.status==='pending').length;
+  }catch(e){ sbUi.pending=0; }
+}
+async function enqueueSbJob(id, kind, body){
+  const job={id, kind, body, status:'pending', createdAt:new Date().toISOString(), attempts:0, lastError:null};
+  await idbPut('sbQueue', id, job);
+  await refreshSbPendingCount();
+  flushSupabaseQueue();
+}
+async function queueSupabaseCardUpsert(cardKey){
+  if(!supabaseEnabled()) return;
+  const c=cards[cardKey]; if(!c) return;
+  const parts=cardParticipantKeys(c);
+  const payload=Object.assign({}, c, {cloudDirty:undefined});
+  delete payload.cloudDirty;
+  await enqueueSbJob('card::'+cardKey, 'upsert_card', {
+    p_team_key:sessionTeamKey(),
+    p_pin:session.pin,
+    p_card_key:cardKey,
+    p_home_team_key:parts.home_team_key,
+    p_away_team_key:parts.away_team_key,
+    p_payload:payload
+  });
+}
+async function queueSupabaseMedia(cardKey, kind, blob){
+  if(!supabaseEnabled()||!blob) return;
+  const b64=await blobToBase64(blob);
+  await enqueueSbJob('media::'+cardKey+'::'+kind, 'upsert_media', {
+    p_team_key:sessionTeamKey(),
+    p_pin:session.pin,
+    p_card_key:cardKey,
+    p_kind:kind,
+    p_content_type:blob.type||'application/octet-stream',
+    p_data_base64:b64
+  });
+}
+async function flushSupabaseQueue(){
+  if(!supabaseEnabled()||sbUi.flushing) return;
+  if(navigator.onLine===false) return;
+  sbUi.flushing=true;
+  try{
+    const all=await idbAll('sbQueue');
+    const pending=Object.values(all).filter(j=>j&&j.status==='pending')
+      .sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+    for(const job of pending){
+      try{
+        job.attempts=(job.attempts||0)+1;
+        // refresh PIN fields from current session
+        if(job.body){
+          job.body.p_team_key=sessionTeamKey();
+          job.body.p_pin=session.pin;
+        }
+        const fn=job.kind==='upsert_media'?'skittles_upsert_media':'skittles_upsert_card';
+        await supabaseRpc(fn, job.body);
+        job.status='sent';
+        job.sentAt=new Date().toISOString();
+        job.lastError=null;
+        sbUi.lastOk=job.sentAt;
+        sbUi.lastErr=null;
+        await idbPut('sbQueue', job.id, job);
+        if(job.kind==='upsert_card' && job.body&&job.body.p_card_key && cards[job.body.p_card_key]){
+          cards[job.body.p_card_key].cloudDirty=false;
+          cards[job.body.p_card_key].cloudUpdatedAt=job.sentAt;
+          await idbPut('cards', job.body.p_card_key, cards[job.body.p_card_key]);
+        }
+      }catch(err){
+        job.lastError=(err&&err.message)?err.message:String(err);
+        await idbPut('sbQueue', job.id, job);
+        sbUi.lastErr=job.lastError;
+        break;
+      }
+    }
+  }catch(e){
+    sbUi.lastErr=(e&&e.message)?e.message:String(e);
+  }finally{
+    sbUi.flushing=false;
+    await refreshSbPendingCount();
+  }
+}
+async function applyRemoteCard(row){
+  if(!row||!row.card_key||!row.payload) return;
+  const key=row.card_key;
+  const remote=row.payload;
+  const local=cards[key];
+  const remoteTs=row.updated_at?Date.parse(row.updated_at):0;
+  const localTs=local&&local.cloudUpdatedAt?Date.parse(local.cloudUpdatedAt):0;
+  // Prefer remote unless local has unsynced edits newer than last cloud stamp
+  if(local && local.cloudDirty && localTs && remoteTs && localTs>remoteTs) return;
+  const merged=Object.assign({}, remote, {key, cloudUpdatedAt:row.updated_at||null, cloudDirty:false});
+  cards[key]=merged;
+  await idbPut('cards', key, merged);
+  const media=row.media||{};
+  for(const kind of Object.keys(media)){
+    const m=media[kind];
+    if(!m||!m.data_base64) continue;
+    const blob=base64ToBlob(m.data_base64, m.content_type||'application/octet-stream');
+    if(kind==='photo'){
+      await idbPut('photos', key, blob);
+      if(photoURLs[key]) URL.revokeObjectURL(photoURLs[key]);
+      photoURLs[key]=URL.createObjectURL(blob);
+      cards[key].hasPhoto=true;
+      await idbPut('cards', key, cards[key]);
+    } else if(kind==='sig_home'||kind==='sig_away'){
+      const side=kind==='sig_home'?'home':'away';
+      await idbPut('sigs', sigStoreKey(key,side), blob);
+      if(!sigURLs[key]) sigURLs[key]={};
+      if(sigURLs[key][side]) URL.revokeObjectURL(sigURLs[key][side]);
+      sigURLs[key][side]=URL.createObjectURL(blob);
+      if(side==='home') cards[key].hasSigHome=true; else cards[key].hasSigAway=true;
+      await idbPut('cards', key, cards[key]);
+    }
+  }
+}
+async function pullSupabaseTeamData(){
+  if(!supabaseEnabled()) return {ok:false, reason:'disabled'};
+  sbUi.pulling=true;
+  try{
+    const rows=await supabaseRpc('skittles_pull',{
+      p_team_key:sessionTeamKey(),
+      p_pin:session.pin
+    });
+    const list=Array.isArray(rows)?rows:[];
+    for(const row of list) await applyRemoteCard(row);
+    sbUi.lastOk=new Date().toISOString();
+    sbUi.lastErr=null;
+    return {ok:true, count:list.length};
+  }catch(err){
+    sbUi.lastErr=(err&&err.message)?err.message:String(err);
+    return {ok:false, reason:sbUi.lastErr};
+  }finally{
+    sbUi.pulling=false;
+  }
+}
+function supabaseStatusHtml(){
+  if(!settings.supabaseSync){
+    return `<p class="muted small" style="margin:8px 0 0">Supabase sync is off. Turn it on and paste your project URL + anon key so teammates share cards.</p>`;
+  }
+  if(!supabaseConfigured()){
+    return `<p class="muted small" style="margin:8px 0 0">Add your Supabase project URL and <b>anon</b> key below (see <code>docs</code> / supabase-sync). Placeholders will not sync.</p>`;
+  }
+  let line='Supabase · team data';
+  if(sbUi.pulling) line+=' · pulling…';
+  if(sbUi.pending) line+=' · '+sbUi.pending+' waiting';
+  else if(sbUi.lastOk) line+=' · last ok '+esc(String(sbUi.lastOk).slice(11,19));
+  if(sbUi.lastErr) line+=' · '+esc(sbUi.lastErr);
+  return `<p class="muted small" style="margin:8px 0 0">${line}</p>`;
 }
 
 /* ---------- result PDF (offline, no library) ---------- */
@@ -885,6 +1101,7 @@ function saveSignatureFromCanvas(c,side,cv){
       sigURLs[c.key][side]=URL.createObjectURL(blob);
       if(side==='home') c.hasSigHome=true; else c.hasSigAway=true;
       persist(c.key);
+      queueSupabaseMedia(c.key, side==='home'?'sig_home':'sig_away', blob).catch(()=>{});
       refreshFinishChecks(c);
     }).catch(saveFailed);
   }, 'image/jpeg', 0.92);
@@ -989,7 +1206,7 @@ function loginView(){
     `<button data-a="pinback" aria-label="Delete">⌫</button><button data-a="pin" data-k="0">0</button><span></span>`;
   return `<div class="wrap">
     ${installCard()}
-    <div class="banner demo">${settings.leagueSync?'Scores sync to the league site after each rub pair (when online).':'Results stay on this phone until league sync is turned on in League settings.'}</div>
+    <div class="banner demo">${settings.supabaseSync&&supabaseConfigured()?'Team cards sync via Supabase after login (when online).':(settings.supabaseSync?'Add Supabase URL + anon key in League settings to share team data.':'Turn on Supabase sync in League settings so teammates see the same cards.')}</div>
     <h2>Log in to score</h2>
     <p class="muted">Pick your team, then enter your 4-digit team PIN.</p>
     <label class="field" for="teamSel">Your team</label>
@@ -1003,6 +1220,8 @@ function loginView(){
 function settingsView(){
   const r=settings.rubs;
   const url=settings.leagueBaseUrl||LEAGUE_DEFAULT_BASE;
+  const sbUrl=settings.supabaseUrl||'';
+  const sbKey=settings.supabaseAnonKey||'';
   return `<div class="wrap">
     <button class="back" data-a="leave-settings">‹ Back</button>
     <h2 style="margin-top:16px">League settings</h2>
@@ -1010,14 +1229,27 @@ function settingsView(){
     <button class="radio ${r===2?'on':''}" data-a="rubs" data-v="2"><span class="dot"></span><span><b>Double rubs</b><br><span class="muted small">Boxes are played in pairs. Rub Score is shown after each pair. South Molton plays this way.</span></span></button>
     <button class="radio ${r===1?'on':''}" data-a="rubs" data-v="1"><span class="dot"></span><span><b>Single rubs</b><br><span class="muted small">Each box is its own rub. Rub Score is shown after every box.</span></span></button>
     <button class="radio ${settings.fines?'on':''}" data-a="fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Adds a Fine button to the keypad. A notch shows in the corner of the box. It never changes the score.</span></span></button>
-    <h3 style="margin:22px 0 8px;font-size:18px">League site sync</h3>
-    <p class="muted small" style="margin:0 0 10px">After each completed rub <b>pair</b> (not each box), scores POST to the league cards API. Cap ${LEAGUE_DAILY_CAP} syncs/day. Offline updates wait on this phone.</p>
+
+    <h3 style="margin:22px 0 8px;font-size:18px">Supabase (shared team data)</h3>
+    <p class="muted small" style="margin:0 0 10px">Teammates who log in with the same team PIN pull and push match cards across phones. Use the <b>anon</b> key only — never the service role. Run the SQL in <code>supabase/migrations/</code> first.</p>
+    <button class="radio ${settings.supabaseSync?'on':''}" data-a="supabase-sync"><span class="dot"></span><span><b>Sync via Supabase</b><br><span class="muted small">Pull on login; upsert on save. Works offline with a queue.</span></span></button>
+    <label class="field" for="supabaseUrl">Supabase project URL</label>
+    <input type="url" id="supabaseUrl" value="${esc(sbUrl||SUPABASE_DEFAULT_URL)}" placeholder="${esc(SUPABASE_DEFAULT_URL)}" autocomplete="off" spellcheck="false">
+    <label class="field" for="supabaseAnonKey" style="margin-top:10px">Supabase anon (public) key</label>
+    <input type="text" id="supabaseAnonKey" value="${esc(sbKey)}" placeholder="Paste anon key from Project Settings → API" autocomplete="off" spellcheck="false">
+    <p class="muted small" style="margin:8px 0 0">Project <code>dtctorijynmcdjtzmgnk</code>. Get the <b>anon</b> <code>public</code> key in the Supabase dashboard (Settings → API). Do <b>not</b> paste the service_role key or the database password.</p>
+    ${supabaseStatusHtml()}
+    <button class="btn quiet block" data-a="supabase-pull" style="margin-top:12px" ${supabaseConfigured()&&session&&session.pin?'':'disabled'}>Pull team data now</button>
+    <button class="btn quiet block" data-a="supabase-flush" style="margin-top:8px">Retry waiting Supabase syncs</button>
+
+    <h3 style="margin:22px 0 8px;font-size:18px">League site API (later)</h3>
+    <p class="muted small" style="margin:0 0 10px">Optional <code>/api/cards</code> push after rub pairs. Prefer Supabase for shared scoring first.</p>
     <button class="radio ${settings.leagueSync?'on':''}" data-a="league-sync"><span class="dot"></span><span><b>Sync to league site</b><br><span class="muted small">POST JSON to <code>/api/cards</code> when a pair completes.</span></span></button>
     <label class="field" for="leagueBaseUrl">API base URL (no trailing slash)</label>
     <input type="url" id="leagueBaseUrl" value="${esc(url)}" placeholder="${esc(LEAGUE_DEFAULT_BASE)}" autocomplete="off" spellcheck="false">
-    <p class="muted small" style="margin:8px 0 0">Cards endpoint: <code>${esc(leagueCardsUrl())}</code>. For phones use a public HTTPS host — not only ${esc(LEAGUE_DEFAULT_BASE)}.</p>
+    <p class="muted small" style="margin:8px 0 0">Cards endpoint: <code>${esc(leagueCardsUrl())}</code>.</p>
     ${leagueSyncStatusHtml()}
-    <button class="btn quiet block" data-a="league-flush" style="margin-top:12px">Retry waiting syncs now</button>
+    <button class="btn quiet block" data-a="league-flush" style="margin-top:12px">Retry waiting league syncs</button>
   </div>`;
 }
 function fixturesView(){
@@ -1325,8 +1557,17 @@ function tryLogin(){
   if(ui.tries>=5){ ui.pinMsg='Too many wrong tries. Ask the league organiser to reset your PIN.'; ui.pin=''; render(); return; }
   const cred=SEED.logins && SEED.logins[ui.teamSel];
   if(cred && ui.pin===cred.pin){
-    const [d,n]=ui.teamSel.split('-').map(Number); session={div:d,num:n}; kvSave('session',session); requestPersist();
-    ui.pin=''; ui.pinMsg=''; ui.tries=0; ui.screen='fixtures'; render(); window.scrollTo(0,0);
+    const [d,n]=ui.teamSel.split('-').map(Number);
+    const pin=ui.pin;
+    session={div:d,num:n,pin,teamKey:teamKey(d,n)};
+    kvSave('session',session); requestPersist();
+    ui.pin=''; ui.pinMsg=''; ui.tries=0; ui.screen='fixtures';
+    render(); window.scrollTo(0,0);
+    // Pull shared team cards into IndexedDB so a new device sees prior matches
+    pullSupabaseTeamData().then(r=>{
+      if(r&&r.ok) render();
+      flushSupabaseQueue();
+    }).catch(()=>{});
   } else { ui.tries++; ui.pin=''; ui.pinMsg='That PIN is not right. Try again.'; render(); }
 }
 function compressBlob(file){
@@ -1417,6 +1658,10 @@ document.addEventListener('click',e=>{
       queueFinalMatchSync(c).catch(()=>{}); ui.sel=null; render(); window.scrollTo(0,0); break; }
     case 'league-sync': settings.leagueSync=!settings.leagueSync; kvSave('settings',settings); render(); if(settings.leagueSync) flushLeagueSyncQueue(); break;
     case 'league-flush': flushLeagueSyncQueue().then(()=>render()); break;
+    case 'supabase-sync': settings.supabaseSync=!settings.supabaseSync; kvSave('settings',settings); render();
+      if(settings.supabaseSync){ pullSupabaseTeamData().then(()=>render()); flushSupabaseQueue(); } break;
+    case 'supabase-pull': pullSupabaseTeamData().then(()=>render()); break;
+    case 'supabase-flush': flushSupabaseQueue().then(()=>render()); break;
     case 'edit': { const c=curCard(); c.status='draft'; persist(c.key); render(); break; }
     case 'share-pdf': { const c=curCard(); if(c) shareMatchPdf(c); break; }
     case 'download-pdf': { const c=curCard(); if(c) downloadMatchPdf(c); break; }
@@ -1431,16 +1676,34 @@ document.addEventListener('change',e=>{
     const v=e.target.value.trim().replace(/\/+$/,'')||LEAGUE_DEFAULT_BASE;
     settings.leagueBaseUrl=v; kvSave('settings',settings); render();
   }
+  if(e.target.id==='supabaseUrl'){
+    settings.supabaseUrl=e.target.value.trim().replace(/\/+$/,'');
+    kvSave('settings',settings); try{ localStorage.setItem('skittles.supabaseUrl',settings.supabaseUrl); }catch(err){}
+    render();
+  }
+  if(e.target.id==='supabaseAnonKey'){
+    settings.supabaseAnonKey=e.target.value.trim();
+    kvSave('settings',settings); try{ localStorage.setItem('skittles.supabaseAnonKey',settings.supabaseAnonKey); }catch(err){}
+    render();
+  }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
     compressBlob(e.target.files[0])
       .then(blob=>idbPut('photos',c.key,blob).then(()=>blob))
-      .then(blob=>{ if(photoURLs[c.key]) URL.revokeObjectURL(photoURLs[c.key]); photoURLs[c.key]=URL.createObjectURL(blob); c.hasPhoto=true; ui.msg=''; persist(c.key); render(); })
+      .then(blob=>{
+        if(photoURLs[c.key]) URL.revokeObjectURL(photoURLs[c.key]);
+        photoURLs[c.key]=URL.createObjectURL(blob);
+        c.hasPhoto=true; ui.msg=''; persist(c.key);
+        queueSupabaseMedia(c.key,'photo',blob).catch(()=>{});
+        render();
+      })
       .catch(()=>{ ui.msg='That photo could not be saved. Check the phone has some free space, then try again.'; render(); });
   }
 });
 document.addEventListener('input',e=>{ if(e.target.id==='newName'){ ui.newName=e.target.value; if(ui.dupe){ ui.dupe=null; } } });
-window.addEventListener('online',()=>{ flushLeagueSyncQueue().finally(render); });
+window.addEventListener('online',()=>{
+  Promise.all([flushLeagueSyncQueue(), flushSupabaseQueue()]).finally(render);
+});
 window.addEventListener('offline',render);
 window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); ui.installEvt=e; if(ui.screen==='login') render(); });
 window.addEventListener('appinstalled',()=>{ ui.installEvt=null; render(); });
@@ -1453,12 +1716,22 @@ async function init(){
     const kv=await idbAll('kv');
     if(kv.settings) settings=Object.assign(settings,kv.settings);
     if(!settings.leagueBaseUrl) settings.leagueBaseUrl=LEAGUE_DEFAULT_BASE;
-    // Optional override: ?leagueBase=https://host or window.LEAGUE_API_BASE
+    if(!settings.supabaseUrl) settings.supabaseUrl=SUPABASE_DEFAULT_URL;
+    // Optional overrides: query params, window.*, localStorage
     try{
-      const q=new URLSearchParams(location.search||'').get('leagueBase');
-      if(q){ settings.leagueBaseUrl=q.trim().replace(/\/+$/,''); kvSave('settings',settings); }
+      const q=new URLSearchParams(location.search||'');
+      const lb=q.get('leagueBase'); if(lb) settings.leagueBaseUrl=lb.trim().replace(/\/+$/,'');
+      const su=q.get('supabaseUrl')||(window.SKITTLES_SUPABASE_URL||'');
+      const sk=q.get('supabaseAnon')||(window.SKITTLES_SUPABASE_ANON_KEY||'');
+      if(su) settings.supabaseUrl=String(su).trim().replace(/\/+$/,'');
+      if(sk) settings.supabaseAnonKey=String(sk).trim();
+      if(!settings.supabaseUrl){ const ls=localStorage.getItem('skittles.supabaseUrl'); if(ls) settings.supabaseUrl=ls; }
+      if(!settings.supabaseAnonKey){ const ls=localStorage.getItem('skittles.supabaseAnonKey'); if(ls) settings.supabaseAnonKey=ls; }
+      if(lb||su||sk) kvSave('settings',settings);
     }catch(e){}
     session=kv.session||null; extra=kv.extraRoster||{};
+    // Older sessions lack pin — Supabase sync needs a fresh login
+    if(session && !session.teamKey && session.div!=null) session.teamKey=teamKey(session.div,session.num);
     cards=await idbAll('cards');
     const photos=await idbAll('photos');
     Object.keys(photos).forEach(k=>{ photoURLs[k]=URL.createObjectURL(photos[k]); });
@@ -1478,6 +1751,7 @@ async function init(){
     });
     await loadSyncMeta();
     await refreshSyncPendingCount();
+    await refreshSbPendingCount();
     requestPersist();
   }catch(e){
     ui.msg='This phone is not letting the app save anything, so scores would be lost if the app closed. Try opening it in a normal (not private) browser window.';
@@ -1485,6 +1759,9 @@ async function init(){
   ui.screen = session ? 'fixtures' : 'login';
   render();
   flushLeagueSyncQueue();
+  if(supabaseEnabled()){
+    pullSupabaseTeamData().then(()=>{ render(); flushSupabaseQueue(); }).catch(()=>{});
+  }
 }
 
 // the offline copy of the app is swapped for a newer one only when the person taps "Update the app" on the fixtures screen
