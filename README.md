@@ -46,7 +46,7 @@ Then choose home or away and the opposing team. Cards list under **Your Quick Ma
 
 ## Share result PDF
 
-On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. The PDF keeps the card’s batting order and uses **Rub Score** (then Each rub, when double rubs) to match the board.
+On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. The PDF keeps the card’s line up and uses **Rub Score** (then Each rub, when double rubs) to match the board.
 
 ## Deploy notes
 

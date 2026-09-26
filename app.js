@@ -965,7 +965,7 @@ function boardView(c,side){
   const grid=`grid-template-columns:repeat(${fmt.rubs},minmax(0,1fr))`;
   let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">${side==='home'?'Home':'Away'}</span><span class="tname">${esc(sideName(c,side))}</span></div>`;
   if(!locked && list.every(p=>!p.name) && last.length) h+=`<button class="btn chalk" data-a="lineup" data-side="${side}">Use last match's line-up</button>`;
-  if(!locked && list.filter(p=>p.name).length>1) h+=`<button class="btn chalk" data-a="reorder" data-side="${side}">Change the batting order</button>`;
+  if(!locked && list.filter(p=>p.name).length>1) h+=`<button class="btn chalk" data-a="reorder" data-side="${side}">Change the line up</button>`;
   list.forEach((p,slot)=>{
     const nameBtn=p.name
       ? `<button class="pname" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${esc(initials(p.name))}<span class="full">${esc(p.name)}</span></button>`
@@ -1032,7 +1032,7 @@ function cardView(){
 
 function reorderView(c,side){
   const list=c.players[side];
-  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">Order</span><span class="tname">${esc(sideName(c,side))}</span></div>
+  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">Line up</span><span class="tname">${esc(sideName(c,side))}</span></div>
     <p class="ohint">Tap ▲ or ▼ to move a player one place. Tap a name to move them straight to any position. Scores move with the player.</p>`;
   list.forEach((p,i)=>{
     h+=`<div class="orow"><span class="onum">${i+1}</span>`+(p.name
