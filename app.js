@@ -48,14 +48,17 @@ function formatUsesPairRubs(c){
   return !!fmt.pairRubs;
 }
 
-/* ---------- storage: IndexedDB on the phone (cards, photos, settings) ---------- */
+/* ---------- storage: IndexedDB on the phone (cards, photos, signatures, settings) ---------- */
 const DBNAME='skittles-scorer';
 let dbp=null;
 function openDB(){
   return new Promise((res,rej)=>{
     if(!window.indexedDB) return rej(new Error('no indexedDB'));
-    const r=indexedDB.open(DBNAME,1);
-    r.onupgradeneeded=()=>{ ['kv','cards','photos'].forEach(s=>r.result.createObjectStore(s)); };
+    const r=indexedDB.open(DBNAME,2);
+    r.onupgradeneeded=()=>{
+      const d=r.result;
+      ['kv','cards','photos','sigs'].forEach(s=>{ if(!d.objectStoreNames.contains(s)) d.createObjectStore(s); });
+    };
     r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
   });
 }
@@ -63,6 +66,9 @@ const db=()=>dbp||(dbp=openDB());
 const idbPut=(s,k,v)=>db().then(d=>new Promise((res,rej)=>{
   const t=d.transaction(s,'readwrite'); t.objectStore(s).put(v,k);
   t.oncomplete=()=>res(true); t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error); }));
+const idbGet=(s,k)=>db().then(d=>new Promise((res,rej)=>{
+  const q=d.transaction(s).objectStore(s).get(k);
+  q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }));
 const idbDel=(s,k)=>db().then(d=>new Promise((res,rej)=>{
   const t=d.transaction(s,'readwrite'); t.objectStore(s).delete(k);
   t.oncomplete=()=>res(true); t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error); }));
@@ -72,12 +78,20 @@ const idbAll=s=>db().then(d=>new Promise((res,rej)=>{
   q.onerror=()=>rej(q.error); }));
 function saveFailed(){ ui.msg='This phone could not save that change. Free up some storage space, then try again.'; render(); }
 const kvSave=(k,v)=>idbPut('kv',k,v).catch(saveFailed);
+function sigStoreKey(cardKey,side){ return cardKey+'::'+side; }
+function revokeSigURLs(key){
+  const o=sigURLs[key]; if(!o) return;
+  if(o.home) URL.revokeObjectURL(o.home);
+  if(o.away) URL.revokeObjectURL(o.away);
+  delete sigURLs[key];
+}
 
 let settings = {rubs:2, fines:false};
 let session  = null;      // {div,num}
 let cards    = {};        // by fixture key
 let extra    = {};        // players added on the phone
 const photoURLs = {};     // object URLs for the stored chalkboard photos
+const sigURLs = {};       // cardKey -> {home?, away?} object URLs for captain signatures
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league' };
@@ -174,7 +188,8 @@ function ensureCard(f){
   if(!cards[f.key]){
     const fmt=FORMATS[f.format]||FORMATS.league;
     cards[f.key]={key:f.key,div:f.div,week:f.week,mi:f.mi,date:f.date,home:f.home,away:f.away,format:fmt.id,
-      players:{home:blankSide(fmt),away:blankSide(fmt)},hasPhoto:false,status:'draft',savedAt:null,submittedAt:null,by:null};
+      players:{home:blankSide(fmt),away:blankSide(fmt)},hasPhoto:false,hasSigHome:false,hasSigAway:false,
+      status:'draft',savedAt:null,submittedAt:null,by:null};
     if(f.quick){ cards[f.key].quick=true; cards[f.key].homeDiv=f.homeDiv; cards[f.key].awayDiv=f.awayDiv; }
     persist(f.key);
   }
@@ -189,7 +204,11 @@ function deleteQuickMatch(key){
   const c=cards[key]; if(!c||!c.quick) return;
   delete cards[key];
   if(photoURLs[key]){ URL.revokeObjectURL(photoURLs[key]); delete photoURLs[key]; }
-  Promise.all([idbDel('cards',key), idbDel('photos',key)]).catch(saveFailed);
+  revokeSigURLs(key);
+  Promise.all([
+    idbDel('cards',key), idbDel('photos',key),
+    idbDel('sigs',sigStoreKey(key,'home')), idbDel('sigs',sigStoreKey(key,'away'))
+  ]).catch(saveFailed);
   if(ui.cardKey===key){ ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null; ui.screen='fixtures'; }
   render();
 }
@@ -301,6 +320,10 @@ function checkCard(c){
   });
   if(!c.hasPhoto){ blockers.push('Chalkboard photo needed'); lines.push({t:'Photo of the chalkboard needed',s:'no'}); }
   else lines.push({t:'Chalkboard photo attached',s:'ok'});
+  if(!c.hasSigHome){ blockers.push('Home captain signature needed'); lines.push({t:'Home captain signature needed',s:'no'}); }
+  else lines.push({t:'Home captain signature captured',s:'ok'});
+  if(!c.hasSigAway){ blockers.push('Away captain signature needed'); lines.push({t:'Away captain signature needed',s:'no'}); }
+  else lines.push({t:'Away captain signature captured',s:'ok'});
   return {blockers,warnings,lines};
 }
 function exportJSON(c){
@@ -310,7 +333,9 @@ function exportJSON(c){
     division:c.quick?null:c.div+1, homeDivision:home.div+1,awayDivision:away.div+1,homeNum:home.num,awayNum:away.num,
     homeScore:sc.home,awayScore:sc.away,homePins:sc.pins.home,awayPins:sc.pins.away,
     homeTotal:sc.home,awayTotal:sc.away,
-    savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,homePlayers:mk('home'),awayPlayers:mk('away')};
+    savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,
+    homeCaptainSig:c.hasSigHome?'captured':null,awayCaptainSig:c.hasSigAway?'captured':null,
+    homePlayers:mk('home'),awayPlayers:mk('away')};
 }
 
 /* ---------- result PDF (offline, no library) ---------- */
@@ -411,12 +436,12 @@ function matchPdfLines(c){
     lines.push({t:' ', size:8, gap:8});
   });
 
-  // Blank labeled boxes for pen / stylus / screenshot — no on-screen signing UI
+  // Captured captain signatures from the app pads are drawn into these boxes
   lines.push({t:'CAPTAIN SIGNATURES', bold:true, size:11, gap:6});
   lines.push({
     sigBoxes:[
-      {title:'HOME CAPTAIN', team:hn},
-      {title:'AWAY CAPTAIN', team:an}
+      {title:'HOME CAPTAIN', team:hn, side:'home'},
+      {title:'AWAY CAPTAIN', team:an, side:'away'}
     ],
     gap:10
   });
@@ -424,11 +449,45 @@ function matchPdfLines(c){
   lines.push({t:'Skittles Scorer', size:8, gap:2});
   return lines;
 }
-function buildMatchPdf(c){
-  // Portrait A4
+function jpegSize(u8){
+  let i=2;
+  while(i+8<u8.length){
+    if(u8[i]!==0xFF) break;
+    const marker=u8[i+1];
+    if(marker===0xD8||marker===0xD9){ i+=2; continue; }
+    const len=(u8[i+2]<<8)|u8[i+3];
+    if(marker>=0xC0&&marker<=0xC3&&marker!==0xC4&&len>=7){
+      return {h:(u8[i+5]<<8)|u8[i+6], w:(u8[i+7]<<8)|u8[i+8]};
+    }
+    i+=2+len;
+  }
+  return {w:400, h:160};
+}
+async function loadSigJpeg(c,side){
+  try{
+    const blob=await idbGet('sigs', sigStoreKey(c.key,side));
+    if(!blob) return null;
+    const buf=new Uint8Array(await blob.arrayBuffer());
+    if(buf.length<4||buf[0]!==0xFF||buf[1]!==0xD8) return null;
+    const dim=jpegSize(buf);
+    return {buf, w:dim.w, h:dim.h};
+  }catch(e){ return null; }
+}
+function pdfJoin(parts){
+  // Mix ASCII strings and binary Uint8Array (JPEG) without UTF-8 corruption
+  const enc=new TextEncoder(), chunks=[];
+  parts.forEach(p=>{ chunks.push(typeof p==='string'?enc.encode(p):p); });
+  return new Blob(chunks,{type:'application/pdf'});
+}
+async function buildMatchPdf(c){
+  // Portrait A4 — signature images from IndexedDB pads when present
   const pageW=595, pageH=842, margin=40;
   const contentW=pageW-margin*2;
-  const sigBoxH=72, sigLabelH=12, sigTeamH=10, sigBlockH=sigLabelH+sigTeamH+4+sigBoxH+14;
+  const sigBoxH=78, sigLabelH=12, sigTeamH=10, sigBlockH=sigLabelH+sigTeamH+4+sigBoxH+14;
+  const sigImgs={
+    home: await loadSigJpeg(c,'home'),
+    away: await loadSigJpeg(c,'away')
+  };
   const lines=matchPdfLines(c);
   const pages=[];
   let y=pageH-margin, buf=[];
@@ -449,16 +508,26 @@ function buildMatchPdf(c){
   if(buf.length) flush();
   if(!pages.length) pages.push([{t:'No scores yet', y:pageH-margin, size:12, kind:'text'}]);
 
+  // objects: string body OR {asciiBefore, bin, asciiAfter} for image streams
   const objects=[];
   const obj=body=>{ objects.push(body); return objects.length; };
+  const objImage=img=>{
+    const dict='<< /Type /XObject /Subtype /Image /Width '+img.w+' /Height '+img.h+
+      ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+img.buf.length+' >>\nstream\n';
+    return obj({asciiBefore:dict, bin:img.buf, asciiAfter:'\nendstream'});
+  };
   const catalogId=obj('');
   const pagesId=obj('');
   const font1=obj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
   const font2=obj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
   const font3=obj('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
+  const imgIds={};
+  if(sigImgs.home) imgIds.home=objImage(sigImgs.home);
+  if(sigImgs.away) imgIds.away=objImage(sigImgs.away);
   const pageIds=[];
   pages.forEach(pageLines=>{
     let graphics='', text='BT\n';
+    const usedImgs={};
     pageLines.forEach(L=>{
       if(L.kind==='sig' && L.sigBoxes){
         const gapX=16;
@@ -470,9 +539,20 @@ function buildMatchPdf(c){
           const boxBottom=teamY-sigTeamH-4-sigBoxH;
           text+='/F2 9 Tf\n1 0 0 1 '+x+' '+titleY+' Tm\n('+pdfEscape(box.title)+') Tj\n';
           text+='/F1 8 Tf\n1 0 0 1 '+x+' '+teamY+' Tm\n('+pdfEscape(box.team)+') Tj\n';
-          // Empty signature rectangle for pen / stylus / screenshot
           graphics+='0.9 w\n'+x+' '+boxBottom+' '+boxW+' '+sigBoxH+' re S\n';
-          text+='/F1 7 Tf\n1 0 0 1 '+(x+6)+' '+(boxBottom+sigBoxH-12)+' Tm\n('+pdfEscape('Sign here')+') Tj\n';
+          const img=sigImgs[box.side], imgId=imgIds[box.side];
+          if(img&&imgId){
+            usedImgs[box.side]=imgId;
+            const pad=4;
+            const maxW=boxW-pad*2, maxH=sigBoxH-pad*2;
+            const scale=Math.min(maxW/img.w, maxH/img.h);
+            const dw=img.w*scale, dh=img.h*scale;
+            const ix=x+pad+(maxW-dw)/2, iy=boxBottom+pad+(maxH-dh)/2;
+            const name=box.side==='home'?'/ImHome':'/ImAway';
+            graphics+='q '+dw.toFixed(2)+' 0 0 '+dh.toFixed(2)+' '+ix.toFixed(2)+' '+iy.toFixed(2)+' cm '+name+' Do Q\n';
+          } else {
+            text+='/F1 7 Tf\n1 0 0 1 '+(x+6)+' '+(boxBottom+sigBoxH-12)+' Tm\n('+pdfEscape('Sign in the app')+') Tj\n';
+          }
         });
         return;
       }
@@ -483,27 +563,42 @@ function buildMatchPdf(c){
     text+='ET';
     const stream=(graphics?graphics:'')+text;
     const contentId=obj('<< /Length '+stream.length+' >>\nstream\n'+stream+'\nendstream');
-    pageIds.push(obj('<< /Type /Page /Parent '+pagesId+' 0 R /MediaBox [0 0 '+pageW+' '+pageH+'] /Contents '+contentId+' 0 R /Resources << /Font << /F1 '+font1+' 0 R /F2 '+font2+' 0 R /F3 '+font3+' 0 R >> >> >>'));
+    let xObj='';
+    if(usedImgs.home) xObj+='/ImHome '+usedImgs.home+' 0 R ';
+    if(usedImgs.away) xObj+='/ImAway '+usedImgs.away+' 0 R ';
+    const xRes=xObj?(' /XObject << '+xObj+'>>'):'';
+    pageIds.push(obj('<< /Type /Page /Parent '+pagesId+' 0 R /MediaBox [0 0 '+pageW+' '+pageH+'] /Contents '+contentId+' 0 R /Resources << /Font << /F1 '+font1+' 0 R /F2 '+font2+' 0 R /F3 '+font3+' 0 R >>'+xRes+' >> >>'));
   });
   objects[catalogId-1]='<< /Type /Catalog /Pages '+pagesId+' 0 R >>';
   objects[pagesId-1]='<< /Type /Pages /Kids ['+pageIds.map(id=>id+' 0 R').join(' ')+'] /Count '+pageIds.length+' >>';
 
-  let pdf='%PDF-1.4\n';
+  const enc=new TextEncoder();
+  const parts=['%PDF-1.4\n'];
   const offsets=[0];
+  let abs=parts[0].length;
   objects.forEach((body,i)=>{
-    offsets.push(pdf.length);
-    pdf+=(i+1)+' 0 obj\n'+body+'\nendobj\n';
+    offsets.push(abs);
+    const head=(i+1)+' 0 obj\n';
+    const tail='\nendobj\n';
+    if(body && typeof body==='object' && body.bin){
+      parts.push(head, body.asciiBefore, body.bin, body.asciiAfter, tail);
+      abs+=enc.encode(head).length+enc.encode(body.asciiBefore).length+body.bin.length+enc.encode(body.asciiAfter).length+enc.encode(tail).length;
+    } else {
+      const chunk=head+body+tail;
+      parts.push(chunk);
+      abs+=enc.encode(chunk).length;
+    }
   });
-  const xref=pdf.length;
-  pdf+='xref\n0 '+(objects.length+1)+'\n';
-  pdf+='0000000000 65535 f \n';
-  for(let i=1;i<=objects.length;i++) pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
-  pdf+='trailer\n<< /Size '+(objects.length+1)+' /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF';
-  return new Blob([pdf],{type:'application/pdf'});
+  const xrefStart=abs;
+  let xref='xref\n0 '+(objects.length+1)+'\n0000000000 65535 f \n';
+  for(let i=1;i<=objects.length;i++) xref+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  xref+='trailer\n<< /Size '+(objects.length+1)+' /Root 1 0 R >>\nstartxref\n'+xrefStart+'\n%%EOF';
+  parts.push(xref);
+  return pdfJoin(parts);
 }
 async function shareMatchPdf(c){
   try{
-    const blob=buildMatchPdf(c);
+    const blob=await buildMatchPdf(c);
     const name=matchPdfFileName(c);
     const file=new File([blob],name,{type:'application/pdf'});
     if(navigator.canShare && navigator.canShare({files:[file]})){
@@ -516,8 +611,7 @@ async function shareMatchPdf(c){
     a.href=url; a.download=name; a.rel='noopener';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url), 2000);
-    ui.msg=''; 
-    // brief non-error note via existing banner only on card uses ui.msg as bad — use sheet-free confirm
+    ui.msg='';
     const note=document.createElement('div');
     note.className='banner ok'; note.setAttribute('role','status');
     note.textContent='PDF saved — check your downloads.';
@@ -529,9 +623,9 @@ async function shareMatchPdf(c){
     render();
   }
 }
-function downloadMatchPdf(c){
+async function downloadMatchPdf(c){
   try{
-    const blob=buildMatchPdf(c);
+    const blob=await buildMatchPdf(c);
     const name=matchPdfFileName(c);
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
@@ -549,10 +643,169 @@ function pdfActionsHtml(c){
   if(!ready) return '';
   const label=c.status==='submitted'?'Share result PDF':'Share PDF of this result';
   return `<div class="pdf-actions">
-    <p class="muted small" style="margin:14px 0 10px">Portrait PDF with the result at the top — made for sharing or screenshots.</p>
+    <p class="muted small" style="margin:14px 0 10px">Portrait PDF with the result, score tables, and captain signatures — made for sharing.</p>
     <button class="btn block" data-a="share-pdf">${label}</button>
     <button class="btn quiet block" data-a="download-pdf" style="margin-top:8px">Download PDF</button>
   </div>`;
+}
+function sigPadsHtml(c){
+  const locked=c.status==='submitted';
+  const pad=(side)=>{
+    const label=side==='home'?'Home captain':'Away captain';
+    const nm=sideName(c,side);
+    const has=side==='home'?c.hasSigHome:c.hasSigAway;
+    const url=sigURLs[c.key]&&sigURLs[c.key][side];
+    let body='';
+    if(locked && has && url){
+      body=`<img class="sig-img" src="${url}" alt="${esc(label)} signature">`;
+    } else {
+      body=`<canvas class="sig-pad" data-side="${side}" aria-label="${esc(label)} signature pad"></canvas>`;
+      if(!locked) body+=`<button type="button" class="btn quiet block sig-clear" data-a="sig-clear" data-side="${side}">Clear ${side} signature</button>`;
+    }
+    return `<div class="sig-pad-wrap" data-side="${side}">
+      <div class="sig-label">${label} · ${esc(nm)}${has?' <span class="sig-ok">✓</span>':''}</div>
+      <p class="muted small sig-hint">Print or draw signature with a finger or stylus</p>
+      ${body}
+    </div>`;
+  };
+  return `<div class="sigs">
+    <h3>Captain signatures</h3>
+    <p class="muted small" style="margin:0 0 4px">Both captains sign below. Signatures are saved on this phone and go onto the result PDF.</p>
+    ${pad('home')}${pad('away')}
+  </div>`;
+}
+function refreshFinishChecks(c){
+  const ul=$app.querySelector('.finish ul.check');
+  if(!ul) return;
+  const chk=checkCard(c);
+  ul.innerHTML=chk.lines.map(l=>`<li class="${l.s==='ok'?'':l.s}">${esc(l.t)}</li>`).join('');
+  const submit=$app.querySelector('.finish [data-a="submit"]');
+  if(submit){
+    submit.disabled=!!chk.blockers.length;
+    const hint=$app.querySelector('.finish [data-a="submit"] + p.muted');
+    if(hint && hint.textContent && hint.textContent.includes('Fix the red')){
+      hint.style.display=chk.blockers.length?'':'none';
+    }
+  }
+  // Update ✓ marks on pad labels without remounting canvases
+  ['home','away'].forEach(side=>{
+    const wrap=$app.querySelector('.sig-pad-wrap[data-side="'+side+'"] .sig-label');
+    if(!wrap) return;
+    const has=side==='home'?c.hasSigHome:c.hasSigAway;
+    const nm=sideName(c,side);
+    const label=side==='home'?'Home captain':'Away captain';
+    wrap.innerHTML=label+' · '+esc(nm)+(has?' <span class="sig-ok">✓</span>':'');
+  });
+  // Show/hide PDF actions when blockers clear
+  const finish=$app.querySelector('.finish');
+  if(!finish||c.status==='submitted') return;
+  let pdf=$app.querySelector('.pdf-actions');
+  const html=pdfActionsHtml(c);
+  if(html && !pdf){
+    const submit=finish.querySelector('[data-a="submit"]');
+    const holder=document.createElement('div');
+    holder.innerHTML=html;
+    const node=holder.firstElementChild;
+    if(submit&&submit.nextSibling) finish.insertBefore(node, submit.nextSibling);
+    else finish.appendChild(node);
+  } else if(!html && pdf) pdf.remove();
+}
+function saveSignatureFromCanvas(c,side,cv){
+  // Flatten onto white JPEG for IndexedDB + PDF embed
+  const w=cv.width, h=cv.height;
+  const out=document.createElement('canvas');
+  out.width=w; out.height=h;
+  const octx=out.getContext('2d');
+  octx.fillStyle='#ffffff';
+  octx.fillRect(0,0,w,h);
+  octx.drawImage(cv,0,0);
+  out.toBlob(blob=>{
+    if(!blob) return;
+    idbPut('sigs', sigStoreKey(c.key,side), blob).then(()=>{
+      if(!sigURLs[c.key]) sigURLs[c.key]={};
+      if(sigURLs[c.key][side]) URL.revokeObjectURL(sigURLs[c.key][side]);
+      sigURLs[c.key][side]=URL.createObjectURL(blob);
+      if(side==='home') c.hasSigHome=true; else c.hasSigAway=true;
+      persist(c.key);
+      refreshFinishChecks(c);
+    }).catch(saveFailed);
+  }, 'image/jpeg', 0.92);
+}
+function clearSignature(side){
+  const c=curCard(); if(!c||c.status==='submitted') return;
+  idbDel('sigs', sigStoreKey(c.key,side)).catch(saveFailed);
+  if(sigURLs[c.key]&&sigURLs[c.key][side]){ URL.revokeObjectURL(sigURLs[c.key][side]); delete sigURLs[c.key][side]; }
+  if(side==='home') c.hasSigHome=false; else c.hasSigAway=false;
+  persist(c.key);
+  const cv=$app.querySelector('canvas.sig-pad[data-side="'+side+'"]');
+  if(cv){
+    const ctx=cv.getContext('2d');
+    const dpr=cv._sigDpr||1;
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.strokeStyle='#1a1a1a';
+    ctx.lineWidth=2.4;
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
+  }
+  refreshFinishChecks(c);
+}
+function mountSignaturePads(){
+  const c=curCard(); if(!c||ui.screen!=='card') return;
+  $app.querySelectorAll('canvas.sig-pad').forEach(cv=>{
+    const side=cv.dataset.side;
+    const dpr=Math.min(window.devicePixelRatio||1, 2);
+    const cssW=Math.max(280, cv.clientWidth||cv.parentElement.clientWidth||300);
+    const cssH=150;
+    cv.width=Math.round(cssW*dpr);
+    cv.height=Math.round(cssH*dpr);
+    cv.style.width='100%';
+    cv.style.height=cssH+'px';
+    cv._sigDpr=dpr;
+    const ctx=cv.getContext('2d');
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.strokeStyle='#1a1a1a';
+    ctx.lineWidth=2.4;
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
+    const url=sigURLs[c.key]&&sigURLs[c.key][side];
+    if(url){
+      const img=new Image();
+      img.onload=()=>{ ctx.drawImage(img,0,0,cssW,cssH); };
+      img.src=url;
+    }
+    if(c.status==='submitted'){ cv.style.pointerEvents='none'; return; }
+    let drawing=false, last=null, dirty=false;
+    const pos=e=>{
+      const r=cv.getBoundingClientRect();
+      return {x:(e.clientX-r.left)*(cssW/r.width), y:(e.clientY-r.top)*(cssH/r.height)};
+    };
+    cv.onpointerdown=e=>{
+      drawing=true; dirty=false; last=pos(e);
+      try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+      e.preventDefault();
+    };
+    cv.onpointermove=e=>{
+      if(!drawing) return;
+      const p=pos(e);
+      ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke();
+      last=p; dirty=true;
+      e.preventDefault();
+    };
+    const end=e=>{
+      if(!drawing) return;
+      drawing=false;
+      if(dirty) saveSignatureFromCanvas(c, side, cv);
+      e.preventDefault();
+    };
+    cv.onpointerup=end;
+    cv.onpointercancel=end;
+  });
 }
 
 /* ---------- views ---------- */
@@ -762,6 +1015,7 @@ function cardView(){
       <p class="muted small" style="margin:0">Take a photo of the chalkboard so the league can check the scores.</p>
       ${c.hasPhoto&&photoURLs[c.key]?`<img class="photo" src="${photoURLs[c.key]}" alt="Photo of the chalkboard">`:''}
       <label class="btn block ${c.hasPhoto?'quiet':''}" style="cursor:pointer">${c.hasPhoto?'Retake photo':'Take photo of the chalkboard'}<input type="file" id="photoIn" accept="image/*" capture="environment" hidden ${locked?'disabled':''}></label>
+      ${sigPadsHtml(c)}
       <ul class="check">${chk.lines.map(l=>`<li class="${l.s==='ok'?'':l.s}">${esc(l.t)}</li>`).join('')}</ul>`;
   if(locked){
     h+=`${pdfActionsHtml(c)}
@@ -852,6 +1106,7 @@ function render(){
   else if(ui.screen==='card') h+=cardView()+(ui.sel?padSheet():'')+(ui.sheet?rosterSheet():'')+(ui.moveSheet?moveSheet():'');
   $app.innerHTML=h;
   if(ui.sel){ scrollToSel(); requestAnimationFrame(scrollToSel); }
+  if(ui.screen==='card') requestAnimationFrame(mountSignaturePads);
 }
 // Sit the selected player's row (name and boxes) directly above the keypad, clear of the score bar
 function scrollToSel(){
@@ -990,6 +1245,7 @@ document.addEventListener('click',e=>{
     case 'edit': { const c=curCard(); c.status='draft'; persist(c.key); render(); break; }
     case 'share-pdf': { const c=curCard(); if(c) shareMatchPdf(c); break; }
     case 'download-pdf': { const c=curCard(); if(c) downloadMatchPdf(c); break; }
+    case 'sig-clear': { clearSignature(D.side); break; }
   }
 });
 document.addEventListener('change',e=>{
@@ -1020,6 +1276,20 @@ async function init(){
     cards=await idbAll('cards');
     const photos=await idbAll('photos');
     Object.keys(photos).forEach(k=>{ photoURLs[k]=URL.createObjectURL(photos[k]); });
+    const sigs=await idbAll('sigs');
+    Object.keys(sigs).forEach(k=>{
+      const parts=String(k).split('::');
+      if(parts.length<2) return;
+      const side=parts.pop();
+      const cardKey=parts.join('::');
+      if(side!=='home'&&side!=='away') return;
+      if(!sigURLs[cardKey]) sigURLs[cardKey]={};
+      sigURLs[cardKey][side]=URL.createObjectURL(sigs[k]);
+      if(cards[cardKey]){
+        if(side==='home') cards[cardKey].hasSigHome=true;
+        else cards[cardKey].hasSigAway=true;
+      }
+    });
     requestPersist();
   }catch(e){
     ui.msg='This phone is not letting the app save anything, so scores would be lost if the app closed. Try opening it in a normal (not private) browser window.';

@@ -132,6 +132,15 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 
 .finish h2{margin-top:6px}
 .photo{width:100%;border-radius:6px;border:3px solid var(--oak);display:block;margin:10px 0}
+.sigs{margin:18px 0 8px}
+.sigs h3{margin:0 0 6px;font-size:18px;font-weight:700}
+.sig-pad-wrap{margin:12px 0;padding:12px;border:2px solid var(--line);border-radius:8px;background:var(--page)}
+.sig-label{font-weight:700;font-size:16px;margin-bottom:2px}
+.sig-label .sig-ok{color:var(--good);font-weight:700}
+.sig-hint{margin:0 0 8px}
+.sig-pad{display:block;width:100%;height:150px;border:2px dashed var(--oak);border-radius:6px;background:#fff;touch-action:none;cursor:crosshair}
+.sig-img{display:block;width:100%;height:150px;object-fit:contain;border:2px solid var(--oak);border-radius:6px;background:#fff}
+.sig-clear{margin-top:8px;min-height:48px;font-size:16px}
 .check{list-style:none;padding:0;margin:12px 0}
 .check li{padding:6px 0 6px 34px;position:relative}
 .check li::before{content:'';position:absolute;left:4px;top:11px;width:18px;height:18px;border-radius:50%;background:var(--good)}
