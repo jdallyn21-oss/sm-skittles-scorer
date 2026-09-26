@@ -54,10 +54,10 @@ let dbp=null;
 function openDB(){
   return new Promise((res,rej)=>{
     if(!window.indexedDB) return rej(new Error('no indexedDB'));
-    const r=indexedDB.open(DBNAME,2);
+    const r=indexedDB.open(DBNAME,3);
     r.onupgradeneeded=()=>{
       const d=r.result;
-      ['kv','cards','photos','sigs'].forEach(s=>{ if(!d.objectStoreNames.contains(s)) d.createObjectStore(s); });
+      ['kv','cards','photos','sigs','syncQueue'].forEach(s=>{ if(!d.objectStoreNames.contains(s)) d.createObjectStore(s); });
     };
     r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
   });
@@ -86,12 +86,17 @@ function revokeSigURLs(key){
   delete sigURLs[key];
 }
 
-let settings = {rubs:2, fines:false};
+// League cards API — default is local/dev; override in settings (never assume only localhost in prod)
+const LEAGUE_DEFAULT_BASE = 'http://127.0.0.1:47331';
+const LEAGUE_DAILY_CAP = 100; // host deploy/write budget — pair cadence stays under this
+let settings = {rubs:2, fines:false, leagueSync:true, leagueBaseUrl:LEAGUE_DEFAULT_BASE};
 let session  = null;      // {div,num}
 let cards    = {};        // by fixture key
 let extra    = {};        // players added on the phone
 const photoURLs = {};     // object URLs for the stored chalkboard photos
 const sigURLs = {};       // cardKey -> {home?, away?} object URLs for captain signatures
+let syncMeta = {day:'', count:0}; // daily POST budget tracker
+let syncUi = {pending:0, lastOk:null, lastErr:null, flushing:false};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league' };
@@ -336,6 +341,159 @@ function exportJSON(c){
     savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,
     homeCaptainSig:c.hasSigHome?'captured':null,awayCaptainSig:c.hasSigAway?'captured':null,
     homePlayers:mk('home'),awayPlayers:mk('away')};
+}
+
+/* ---------- league site sync: end of each rub pair/group (not per box) ---------- */
+function leagueBaseUrl(){
+  const fromWin=(typeof window!=='undefined' && window.LEAGUE_API_BASE)?String(window.LEAGUE_API_BASE).trim():'';
+  const fromSet=(settings.leagueBaseUrl||'').trim();
+  const raw=fromWin||fromSet||LEAGUE_DEFAULT_BASE;
+  return raw.replace(/\/+$/,'');
+}
+function leagueCardsUrl(){ return leagueBaseUrl()+'/api/cards'; }
+function leagueSyncEnabled(){ return !!settings.leagueSync && !!leagueBaseUrl(); }
+function isRubGroupComplete(c, groupBoxes){
+  return ['home','away'].every(side=>{
+    const named=c.players[side].filter(p=>p.name);
+    if(!named.length) return false;
+    return named.every(p=>groupBoxes.every(b=>p.boxes[b]!==null));
+  });
+}
+function rubGroupsCompleteFlags(c){
+  return groupsFor(c).map(g=>isRubGroupComplete(c,g));
+}
+function exportPairPayload(c, groupIndex){
+  const groups=groupsFor(c);
+  const base=exportJSON(c);
+  return Object.assign({}, base, {
+    localKey:c.key,
+    status:c.status||'draft',
+    groupIndex,
+    groupBoxes:groups[groupIndex]?groups[groupIndex].slice():[],
+    partial:true,
+    event:'rub-pair-complete',
+    completedGroups:rubGroupsCompleteFlags(c),
+    syncedAt:new Date().toISOString(),
+    submittedByTeam:session?{div:session.div,num:session.num,name:teamName(session.div,session.num)}:null
+  });
+}
+function exportFinalPayload(c){
+  return Object.assign({}, exportJSON(c), {
+    localKey:c.key,
+    status:c.status||'submitted',
+    partial:false,
+    event:'match-submitted',
+    completedGroups:rubGroupsCompleteFlags(c),
+    syncedAt:new Date().toISOString(),
+    submittedByTeam:session?{div:session.div,num:session.num,name:teamName(session.div,session.num)}:null
+  });
+}
+async function loadSyncMeta(){
+  try{
+    const m=await idbGet('kv','syncMeta');
+    if(m&&m.day) syncMeta=m;
+  }catch(e){}
+  const day=todayISO();
+  if(syncMeta.day!==day){ syncMeta={day, count:0}; }
+}
+function saveSyncMeta(){ return idbPut('kv','syncMeta',syncMeta).catch(()=>{}); }
+async function refreshSyncPendingCount(){
+  try{
+    const all=await idbAll('syncQueue');
+    syncUi.pending=Object.values(all).filter(j=>j&&j.status==='pending').length;
+  }catch(e){ syncUi.pending=0; }
+}
+async function enqueueLeagueSync(jobId, payload){
+  if(!leagueSyncEnabled()) return;
+  const job={
+    id:jobId, status:'pending', payload, createdAt:new Date().toISOString(),
+    attempts:0, lastError:null, url:leagueCardsUrl()
+  };
+  await idbPut('syncQueue', jobId, job);
+  await refreshSyncPendingCount();
+  flushLeagueSyncQueue();
+}
+function maybeQueueRubPairSync(c, beforeFlags){
+  if(!leagueSyncEnabled()||!c) return;
+  const after=rubGroupsCompleteFlags(c);
+  after.forEach((done,i)=>{
+    if(done && !(beforeFlags&&beforeFlags[i])){
+      const payload=exportPairPayload(c,i);
+      enqueueLeagueSync(c.key+'::pair::'+i, payload).catch(saveFailed);
+    }
+  });
+}
+async function queueFinalMatchSync(c){
+  if(!leagueSyncEnabled()||!c) return;
+  return enqueueLeagueSync(c.key+'::final', exportFinalPayload(c));
+}
+async function postLeagueCard(payload){
+  const url=leagueCardsUrl();
+  const res=await fetch(url,{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Accept':'application/json'},
+    body:JSON.stringify(payload),
+    mode:'cors',
+    credentials:'omit',
+    cache:'no-store'
+  });
+  const text=await res.text().catch(()=> '');
+  let data=null;
+  try{ data=text?JSON.parse(text):null; }catch(e){ data={raw:text}; }
+  if(!res.ok){
+    const err=new Error('League API '+res.status+(text?' '+text.slice(0,160):''));
+    err.status=res.status; err.body=data; throw err;
+  }
+  return data;
+}
+async function flushLeagueSyncQueue(){
+  if(!leagueSyncEnabled()||syncUi.flushing) return;
+  if(navigator.onLine===false) return;
+  syncUi.flushing=true;
+  try{
+    await loadSyncMeta();
+    const all=await idbAll('syncQueue');
+    const pending=Object.values(all).filter(j=>j&&j.status==='pending')
+      .sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+    for(const job of pending){
+      if(syncMeta.count>=LEAGUE_DAILY_CAP){
+        syncUi.lastErr='Daily sync cap ('+LEAGUE_DAILY_CAP+') reached — waiting until tomorrow.';
+        break;
+      }
+      try{
+        job.attempts=(job.attempts||0)+1;
+        await postLeagueCard(job.payload);
+        job.status='sent';
+        job.sentAt=new Date().toISOString();
+        job.lastError=null;
+        syncMeta.count+=1;
+        syncUi.lastOk=job.sentAt;
+        syncUi.lastErr=null;
+        await idbPut('syncQueue', job.id, job);
+        await saveSyncMeta();
+      }catch(err){
+        job.lastError=(err&&err.message)?err.message:String(err);
+        await idbPut('syncQueue', job.id, job);
+        syncUi.lastErr=job.lastError;
+        // stop this flush pass on hard failures (network / 5xx); leave job pending
+        break;
+      }
+    }
+  }catch(e){
+    syncUi.lastErr=(e&&e.message)?e.message:String(e);
+  }finally{
+    syncUi.flushing=false;
+    await refreshSyncPendingCount();
+  }
+}
+function leagueSyncStatusHtml(){
+  if(!settings.leagueSync) return '';
+  const base=leagueBaseUrl();
+  let line='League sync → '+esc(base)+'/api/cards';
+  if(syncUi.pending) line+=' · '+syncUi.pending+' waiting';
+  else if(syncUi.lastOk) line+=' · last sent '+esc(syncUi.lastOk.slice(11,19));
+  if(syncUi.lastErr) line+=' · '+esc(syncUi.lastErr);
+  return `<p class="muted small league-sync-status" style="margin:8px 0 0">${line}</p>`;
 }
 
 /* ---------- result PDF (offline, no library) ---------- */
@@ -831,7 +989,7 @@ function loginView(){
     `<button data-a="pinback" aria-label="Delete">⌫</button><button data-a="pin" data-k="0">0</button><span></span>`;
   return `<div class="wrap">
     ${installCard()}
-    <div class="banner demo">Results stay on this phone until the league database is connected.</div>
+    <div class="banner demo">${settings.leagueSync?'Scores sync to the league site after each rub pair (when online).':'Results stay on this phone until league sync is turned on in League settings.'}</div>
     <h2>Log in to score</h2>
     <p class="muted">Pick your team, then enter your 4-digit team PIN.</p>
     <label class="field" for="teamSel">Your team</label>
@@ -844,6 +1002,7 @@ function loginView(){
 }
 function settingsView(){
   const r=settings.rubs;
+  const url=settings.leagueBaseUrl||LEAGUE_DEFAULT_BASE;
   return `<div class="wrap">
     <button class="back" data-a="leave-settings">‹ Back</button>
     <h2 style="margin-top:16px">League settings</h2>
@@ -851,6 +1010,14 @@ function settingsView(){
     <button class="radio ${r===2?'on':''}" data-a="rubs" data-v="2"><span class="dot"></span><span><b>Double rubs</b><br><span class="muted small">Boxes are played in pairs. Rub Score is shown after each pair. South Molton plays this way.</span></span></button>
     <button class="radio ${r===1?'on':''}" data-a="rubs" data-v="1"><span class="dot"></span><span><b>Single rubs</b><br><span class="muted small">Each box is its own rub. Rub Score is shown after every box.</span></span></button>
     <button class="radio ${settings.fines?'on':''}" data-a="fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Adds a Fine button to the keypad. A notch shows in the corner of the box. It never changes the score.</span></span></button>
+    <h3 style="margin:22px 0 8px;font-size:18px">League site sync</h3>
+    <p class="muted small" style="margin:0 0 10px">After each completed rub <b>pair</b> (not each box), scores POST to the league cards API. Cap ${LEAGUE_DAILY_CAP} syncs/day. Offline updates wait on this phone.</p>
+    <button class="radio ${settings.leagueSync?'on':''}" data-a="league-sync"><span class="dot"></span><span><b>Sync to league site</b><br><span class="muted small">POST JSON to <code>/api/cards</code> when a pair completes.</span></span></button>
+    <label class="field" for="leagueBaseUrl">API base URL (no trailing slash)</label>
+    <input type="url" id="leagueBaseUrl" value="${esc(url)}" placeholder="${esc(LEAGUE_DEFAULT_BASE)}" autocomplete="off" spellcheck="false">
+    <p class="muted small" style="margin:8px 0 0">Cards endpoint: <code>${esc(leagueCardsUrl())}</code>. For phones use a public HTTPS host — not only ${esc(LEAGUE_DEFAULT_BASE)}.</p>
+    ${leagueSyncStatusHtml()}
+    <button class="btn quiet block" data-a="league-flush" style="margin-top:12px">Retry waiting syncs now</button>
   </div>`;
 }
 function fixturesView(){
@@ -1008,7 +1175,7 @@ function cardView(){
   h+=`<div class="strip" aria-live="polite"><div class="row">
       <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
       <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
-      <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}</div></div>
+      <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${settings.leagueSync&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
     <section class="card finish"><h2>Finish the match</h2>
@@ -1122,7 +1289,12 @@ function scrollToSel(){
 
 /* ---------- actions ---------- */
 function setVal(v){
-  const c=curCard(), s=ui.sel; const p=c.players[s.side][s.slot]; p.boxes[s.box]=v; if(v!==9) p.spare[s.box]=false; persist(c.key); render();
+  const c=curCard(), s=ui.sel;
+  const before=rubGroupsCompleteFlags(c);
+  const p=c.players[s.side][s.slot]; p.boxes[s.box]=v; if(v!==9) p.spare[s.box]=false;
+  persist(c.key);
+  maybeQueueRubPairSync(c, before);
+  render();
 }
 function move(dir){
   const c=curCard(), order=entryOrder(c), s=ui.sel;
@@ -1241,7 +1413,10 @@ document.addEventListener('click',e=>{
       const names=(SEED.lineups[teamKey(meta.div,meta.num)]||[]).slice(0,fmt.slots);
       names.forEach((n,i)=>{ c.players[D.side][i].name=n; }); persist(c.key); render(); break; }
     case 'submit': { const c=curCard(); if(checkCard(c).blockers.length) break;
-      c.status='submitted'; c.submittedAt=new Date().toISOString(); c.by=teamName(session.div,session.num); persist(c.key); ui.sel=null; render(); window.scrollTo(0,0); break; }
+      c.status='submitted'; c.submittedAt=new Date().toISOString(); c.by=teamName(session.div,session.num); persist(c.key);
+      queueFinalMatchSync(c).catch(()=>{}); ui.sel=null; render(); window.scrollTo(0,0); break; }
+    case 'league-sync': settings.leagueSync=!settings.leagueSync; kvSave('settings',settings); render(); if(settings.leagueSync) flushLeagueSyncQueue(); break;
+    case 'league-flush': flushLeagueSyncQueue().then(()=>render()); break;
     case 'edit': { const c=curCard(); c.status='draft'; persist(c.key); render(); break; }
     case 'share-pdf': { const c=curCard(); if(c) shareMatchPdf(c); break; }
     case 'download-pdf': { const c=curCard(); if(c) downloadMatchPdf(c); break; }
@@ -1252,6 +1427,10 @@ document.addEventListener('change',e=>{
   if(e.target.id==='teamSel'){ ui.teamSel=e.target.value; ui.pinMsg=''; }
   if(e.target.id==='qmOpp'){ ui.qmOpp=e.target.value; ui.qmMsg=''; render(); }
   if(e.target.id==='qmFormat'){ ui.qmFormat=e.target.value; ui.qmMsg=''; render(); }
+  if(e.target.id==='leagueBaseUrl'){
+    const v=e.target.value.trim().replace(/\/+$/,'')||LEAGUE_DEFAULT_BASE;
+    settings.leagueBaseUrl=v; kvSave('settings',settings); render();
+  }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
     compressBlob(e.target.files[0])
@@ -1261,7 +1440,8 @@ document.addEventListener('change',e=>{
   }
 });
 document.addEventListener('input',e=>{ if(e.target.id==='newName'){ ui.newName=e.target.value; if(ui.dupe){ ui.dupe=null; } } });
-window.addEventListener('online',render); window.addEventListener('offline',render);
+window.addEventListener('online',()=>{ flushLeagueSyncQueue().finally(render); });
+window.addEventListener('offline',render);
 window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); ui.installEvt=e; if(ui.screen==='login') render(); });
 window.addEventListener('appinstalled',()=>{ ui.installEvt=null; render(); });
 
@@ -1272,6 +1452,12 @@ async function init(){
   try{
     const kv=await idbAll('kv');
     if(kv.settings) settings=Object.assign(settings,kv.settings);
+    if(!settings.leagueBaseUrl) settings.leagueBaseUrl=LEAGUE_DEFAULT_BASE;
+    // Optional override: ?leagueBase=https://host or window.LEAGUE_API_BASE
+    try{
+      const q=new URLSearchParams(location.search||'').get('leagueBase');
+      if(q){ settings.leagueBaseUrl=q.trim().replace(/\/+$/,''); kvSave('settings',settings); }
+    }catch(e){}
     session=kv.session||null; extra=kv.extraRoster||{};
     cards=await idbAll('cards');
     const photos=await idbAll('photos');
@@ -1290,12 +1476,15 @@ async function init(){
         else cards[cardKey].hasSigAway=true;
       }
     });
+    await loadSyncMeta();
+    await refreshSyncPendingCount();
     requestPersist();
   }catch(e){
     ui.msg='This phone is not letting the app save anything, so scores would be lost if the app closed. Try opening it in a normal (not private) browser window.';
   }
   ui.screen = session ? 'fixtures' : 'login';
   render();
+  flushLeagueSyncQueue();
 }
 
 // the offline copy of the app is swapped for a newer one only when the person taps "Update the app" on the fixtures screen

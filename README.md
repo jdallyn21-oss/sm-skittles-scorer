@@ -48,6 +48,10 @@ Then choose home or away and the opposing team. Cards list under **Your Quick Ma
 
 On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. The PDF keeps the card’s line up and uses **Rub Score** (then Each rub, when double rubs) to match the board.
 
+## League site sync
+
+When **Sync to league site** is on (League settings), completing a rub **pair** (`groupsFor` groups such as boxes 0–1) enqueues a `POST` to `{base}/api/cards` (default base `http://127.0.0.1:47331`). Base URL is configurable; override with `?leagueBase=https://your-host` or `window.LEAGUE_API_BASE`. Offline updates sit in IndexedDB until the API is reachable. Cap: 100 successful POSTs per day.
+
 ## Deploy notes
 
 `_headers` is included for hosts that honour it (for example Netlify): no-cache for HTML / SW / manifest, long-cache for fonts.
