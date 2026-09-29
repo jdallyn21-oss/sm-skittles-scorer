@@ -70,6 +70,10 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .qm-row .qm-open{flex:1;min-width:0;border-top:0;padding-left:0;padding-right:0}
 .qm-del{flex:0 0 auto;align-self:center;min-height:48px;padding:8px 12px;border-radius:8px;border:2px solid var(--line);background:transparent;color:var(--bad);font-weight:700;font-size:15px}
 .state-done{color:var(--good);font-weight:600}
+.state-win{color:var(--good);font-weight:700;white-space:nowrap}
+.state-loss{color:var(--bad);font-weight:700;white-space:nowrap}
+.state-draw{color:var(--brass);font-weight:700;white-space:nowrap}
+.result-mark{display:inline-block;min-width:1.1em;margin-right:2px}
 .state-wait{color:var(--brass);font-weight:700}
 
 /* score card */

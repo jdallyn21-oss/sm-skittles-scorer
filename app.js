@@ -223,13 +223,16 @@ function fixtureResultForKey(key){
   }
   return null;
 }
-/** Scoreline for All fixtures: user's pins first, then opponent (row already says Home/Away v …). */
+/** Scoreline for All fixtures: user's pins first, then opponent, plus W/L/D from their view. */
 function fixtureScorelineForUser(f, played, userNum){
-  if(!played) return '';
+  if(!played) return null;
   const userIsHome=f.home===userNum;
   const mine=userIsHome?played.h:played.a;
   const theirs=userIsHome?played.a:played.h;
-  return mine+' – '+theirs;
+  let outcome='D', cls='state-draw';
+  if(mine>theirs){ outcome='W'; cls='state-win'; }
+  else if(mine<theirs){ outcome='L'; cls='state-loss'; }
+  return {text:mine+' – '+theirs, outcome, cls};
 }
 function nextFixture(list){
   const t=todayISO();
@@ -605,6 +608,13 @@ async function loadNativeLeagueStats(opts){
   ui.leagueStats={results, total};
   ui.leagueStatsSource=sources.join('+')||'none';
   rebuildLeaguePlayedCache(results);
+  // Keep SEED.played in sync so All fixtures sees the same totals as Results immediately
+  try{
+    Object.keys(leaguePlayedCache).forEach(k=>{
+      SEED.played=SEED.played||{};
+      SEED.played[k]={h:leaguePlayedCache[k].h, a:leaguePlayedCache[k].a};
+    });
+  }catch(e){}
   if(!total){
     ui.leagueStatsErr=liveErr==='offline'
       ? 'No signal and no saved league results on this phone yet.'
@@ -1553,15 +1563,13 @@ function fixturesView(){
   list.forEach(f=>{
     if(f.bye){ h+=`<div class="frow"><span>${fmtDate(f.date)} · Week ${f.week}</span><span class="muted">Bye</span></div>`; return; }
     const c=cards[f.key], home=f.home===n, opp=teamName(d,home?f.away:f.home);
-    const played=f.played||fixtureResultForKey(f.key);
+    const played=fixtureResultForKey(f.key);
     let st='<span class="muted">Not started</span>';
     if(played){
-      const where=played.source==='local'||played.source==='local-draft'?'on this phone':'on the site';
-      st=`<span class="state-done">${played.h} – ${played.a} ${where}</span>`;
+      st=`<span class="state-done">${esc(fixtureScorelineForUser(f, played, n))}</span>`;
     } else if(c&&c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
     else if(c) st='<span class="state-wait">In progress</span>';
     const inner=`<span><b>${fmtDate(f.date)}</b> · Week ${f.week}<br><span class="muted small">${home?'Home':'Away'} v ${esc(opp)}</span></span>${st}`;
-    // Played fixtures stay tappable so either team can still open/fix the card
     h+=`<button class="frow" data-a="open" data-key="${f.key}">${inner}</button>`;
   });
   return h+'</div></div>';
