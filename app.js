@@ -200,11 +200,20 @@ function rebuildLeaguePlayedCache(resultsByDiv){
   });
   leaguePlayedCache=next;
 }
-/** Best-known scoreline for a league fixture key: live/bundled cache, then SEED.played, then local submitted card. */
+/** Best-known scoreline for a league fixture key: live/bundled cache, then SEED.played, then league stats map, then local submitted card. */
 function fixtureResultForKey(key){
   if(leaguePlayedCache[key]) return leaguePlayedCache[key];
   const seed=SEED.played&&SEED.played[key];
   if(seed && Number.isFinite(seed.h) && Number.isFinite(seed.a)) return {h:seed.h, a:seed.a, source:'seed'};
+  // Direct lookup from loaded League stats (same data Results uses) — covers race before cache rebuild
+  const parts=String(key).split('-').map(Number);
+  if(parts.length===3 && ui.leagueStats && Array.isArray(ui.leagueStats.results)){
+    const [div,week,mi]=parts;
+    const res=ui.leagueStats.results[div] && ui.leagueStats.results[div]['w'+week+'m'+mi];
+    if(res && Number.isFinite(res.homeTotal) && Number.isFinite(res.awayTotal)){
+      return {h:res.homeTotal, a:res.awayTotal, source:res.source||'league'};
+    }
+  }
   const c=cards[key];
   if(c && !c.quick && (c.status==='submitted' || (c.players&&(teamPins(c.players.home)+teamPins(c.players.away)>0)))){
     const sc=matchScore(c);
@@ -213,6 +222,14 @@ function fixtureResultForKey(key){
     }
   }
   return null;
+}
+/** Scoreline for All fixtures: user's pins first, then opponent (row already says Home/Away v …). */
+function fixtureScorelineForUser(f, played, userNum){
+  if(!played) return '';
+  const userIsHome=f.home===userNum;
+  const mine=userIsHome?played.h:played.a;
+  const theirs=userIsHome?played.a:played.h;
+  return mine+' – '+theirs;
 }
 function nextFixture(list){
   const t=todayISO();
@@ -2109,6 +2126,7 @@ async function init(){
   ui.screen = session ? 'fixtures' : 'login';
   render();
   flushLeagueSyncQueue();
+  if(session) loadNativeLeagueStats({quiet:true});
   if(supabaseEnabled()){
     pullSupabaseTeamData().then(()=>{ render(); flushSupabaseQueue(); }).catch(()=>{ render(); });
   }
