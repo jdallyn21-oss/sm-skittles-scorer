@@ -68,7 +68,7 @@ Scorers only enter a **team PIN**. Backend config is maintainer-only:
 
 ## League stats (in-app)
 
-After login, **League stats** shows native tables, results and player averages inside the scorer (no iframe).
+After login, **League stats** sits next to **Log out** in the top nav. Native tables, results and averages (no iframe, no dump).
 
 - Data: bundled season results + live `GET {leagueBaseUrl}/api/cards` / Supabase `skittles_league_cards` when online
 - Division switcher · Table · Results · Averages · Refresh

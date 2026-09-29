@@ -1454,16 +1454,23 @@ function settingsView(){
     <button class="btn quiet block" data-a="supabase-flush" style="margin-top:8px">Retry Supabase queue</button>
   </div>`;
 }
+function sessionTopNav(active){
+  if(!session) return '';
+  const {div:d,num:n}=session;
+  const onStats=active==='league-stats';
+  return `<div class="session-top">
+    <div class="session-top-team"><h2 style="margin:0">${esc(teamName(d,n))}</h2><span class="muted small">Division ${d+1}</span></div>
+    <div class="session-top-nav" role="navigation" aria-label="Account">
+      <button type="button" class="navtab ${onStats?'on':''}" data-a="league-stats" aria-current="${onStats?'page':'false'}">League stats</button>
+      <button type="button" class="back" data-a="logout">Log out</button>
+    </div>
+  </div>`;
+}
 function fixturesView(){
   const {div:d,num:n}=session, list=fixturesFor(d,n), nx=nextFixture(list), qms=quickMatchesFor(d,n);
-  let h=`<div class="wrap"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
-    <div><h2 style="margin:0">${esc(teamName(d,n))}</h2><span class="muted small">Division ${d+1}</span></div>
-    <button class="back" data-a="logout">Log out</button></div>`;
+  let h=`<div class="wrap">${sessionTopNav('fixtures')}`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
   h+=cloudSyncStatusHtml();
-  h+=`<div class="card"><b>League stats</b>
-    <p class="muted small" style="margin:6px 0 12px">Tables, results and averages for the league — built into this app. Refresh when online for the latest scores.</p>
-    <button class="btn block" data-a="league-stats">View league stats</button></div>`;
   h+=`<div class="card"><b>Quick Match / Cup</b>
     <p class="muted small" style="margin:6px 0 12px">Score as your team against any opponent — league-style friendly or a cup format (Western Counties, Sid Squire, Pidler, Front Pin, Concrete).</p>
     <button class="btn block" data-a="quick">Set up a Quick Match or Cup</button></div>`;
@@ -1561,8 +1568,9 @@ function leagueStatsView(){
   const tab=(ui.leagueTab==='results'||ui.leagueTab==='averages')?ui.leagueTab:'table';
   const meName=teamName(session.div,session.num);
   let h=`<div class="wrap wide">
-    <button class="back" data-a="back">‹ Fixtures</button>
-    <h2 style="margin-top:16px">League stats</h2>
+    ${sessionTopNav('league-stats')}
+    <p class="muted" style="margin:0 0 8px"><button type="button" class="linkbtn" data-a="back" style="padding-left:0">‹ Back to fixtures</button></p>
+    <h2 style="margin-top:4px">League stats</h2>
     <p class="muted">Division tables, results and averages in the scorer. Scoring still works offline.</p>
     <div class="league-divswitch" role="group" aria-label="Division">
       ${[0,1,2].map(d=>`<button type="button" class="${div===d?'on':''}" data-a="league-div" data-div="${d}">Division ${d+1}</button>`).join('')}
