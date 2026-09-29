@@ -125,7 +125,7 @@ const photoURLs = {};     // object URLs for the stored chalkboard photos
 const sigURLs = {};       // cardKey -> {home?, away?} object URLs for captain signatures
 let syncMeta = {day:'', count:0}; // daily league POST budget tracker
 let syncUi = {pending:0, lastOk:null, lastErr:null, flushing:false};
-let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false};
+let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false, ready:false, setupNeeded:false};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
@@ -685,6 +685,8 @@ async function flushSupabaseQueue(){
         job.lastError=(err&&err.message)?err.message:String(err);
         await idbPut('sbQueue', job.id, job);
         sbUi.lastErr=job.lastError;
+        const lower=String(job.lastError||'').toLowerCase();
+        if(lower.includes('invalid team or pin') || lower.includes('42501')) sbUi.setupNeeded=true;
         break;
       }
     }
@@ -741,13 +743,35 @@ async function pullSupabaseTeamData(){
     for(const row of list) await applyRemoteCard(row);
     sbUi.lastOk=new Date().toISOString();
     sbUi.lastErr=null;
+    sbUi.ready=true;
+    sbUi.setupNeeded=false;
     return {ok:true, count:list.length};
   }catch(err){
-    sbUi.lastErr=(err&&err.message)?err.message:String(err);
-    return {ok:false, reason:sbUi.lastErr};
+    const msg=(err&&err.message)?err.message:String(err);
+    sbUi.lastErr=msg;
+    sbUi.ready=false;
+    // Local PIN matched seed.js, but Supabase teams table rejected it → seed_teams.sql not applied
+    const lower=msg.toLowerCase();
+    sbUi.setupNeeded=lower.includes('invalid team or pin') || lower.includes('42501');
+    return {ok:false, reason:msg, setupNeeded:sbUi.setupNeeded};
   }finally{
     sbUi.pulling=false;
   }
+}
+function cloudSyncStatusHtml(){
+  if(!supabaseConfigured()||!session) return '';
+  if(sbUi.pulling) return `<div class="banner demo" role="status">Checking phone sync…</div>`;
+  if(sbUi.setupNeeded){
+    return `<div class="banner bad" role="status">Phone sync is not on yet — scores still save on this phone. Ask the league organiser to finish Supabase setup (team PIN list), then log in again.</div>`;
+  }
+  if(sbUi.ready){
+    const pending=sbUi.pending?` · ${sbUi.pending} change${sbUi.pending===1?'':'s'} waiting to upload`:'';
+    return `<div class="banner ok" role="status">Phone sync is on${pending}. Other phones on this team see shared cards when online.</div>`;
+  }
+  if(sbUi.lastErr){
+    return `<div class="banner bad" role="status">Phone sync hiccup: ${esc(sbUi.lastErr)}. Scoring still works on this phone.</div>`;
+  }
+  return '';
 }
 /* ---------- result PDF (offline, no library) ---------- */
 function pdfSafe(s){
@@ -1248,7 +1272,7 @@ function loginView(){
     `<button data-a="pinback" aria-label="Delete">⌫</button><button data-a="pin" data-k="0">0</button><span></span>`;
   return `<div class="wrap">
     ${installCard()}
-    ${supabaseConfigured()?'<div class="banner demo">Team cards sync across phones after login when you are online.</div>':''}
+    ${supabaseConfigured()?'<div class="banner demo">After login, cards can sync across phones when the league organiser has cloud sync switched on.</div>':''}
     <h2>Log in to score</h2>
     <p class="muted">Pick your team, then enter your 4-digit team PIN.</p>
     <label class="field" for="teamSel">Your team</label>
@@ -1283,6 +1307,7 @@ function fixturesView(){
     <div><h2 style="margin:0">${esc(teamName(d,n))}</h2><span class="muted small">Division ${d+1}</span></div>
     <button class="back" data-a="logout">Log out</button></div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
+  h+=cloudSyncStatusHtml();
   h+=`<div class="card"><b>League stats</b>
     <p class="muted small" style="margin:6px 0 12px">Live tables, fixtures and averages from the SM Skittles league site. Needs a signal — scoring still works offline.</p>
     <button class="btn block" data-a="league-stats">View league stats</button></div>`;
@@ -1668,9 +1693,9 @@ function tryLogin(){
     render(); window.scrollTo(0,0);
     // Pull shared team cards into IndexedDB so a new device sees prior matches
     pullSupabaseTeamData().then(r=>{
-      if(r&&r.ok) render();
-      flushSupabaseQueue();
-    }).catch(()=>{});
+      render();
+      if(r&&r.ok) flushSupabaseQueue();
+    }).catch(()=>{ render(); });
   } else { ui.tries++; ui.pin=''; ui.pinMsg='That PIN is not right. Try again.'; render(); }
 }
 function compressBlob(file){
@@ -1702,7 +1727,7 @@ document.addEventListener('click',e=>{
     case 'supabase-flush': if(!isAdminMode()) break; flushSupabaseQueue().then(()=>render()); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
-    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; ui.leagueTab='live'; ui.leagueStatsData=null; ui.leagueStatsErr=''; render(); break;
+    case 'logout': session=null; kvSave('session',null); sbUi.ready=false; sbUi.setupNeeded=false; sbUi.lastErr=null; ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; ui.leagueTab='live'; ui.leagueStatsData=null; ui.leagueStatsErr=''; render(); break;
     case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
     case 'league-stats':
       ui.screen='league-stats'; ui.leagueTab=ui.leagueTab||'live'; render(); window.scrollTo(0,0);
@@ -1861,7 +1886,7 @@ async function init(){
   render();
   flushLeagueSyncQueue();
   if(supabaseEnabled()){
-    pullSupabaseTeamData().then(()=>{ render(); flushSupabaseQueue(); }).catch(()=>{});
+    pullSupabaseTeamData().then(()=>{ render(); flushSupabaseQueue(); }).catch(()=>{ render(); });
   }
 }
 
