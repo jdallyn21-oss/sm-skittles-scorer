@@ -1,5 +1,5 @@
 /* Skittles Scorer service worker. Keeps the whole app on the phone so it opens with no signal. */
-const VERSION = 'cloud-sync-status-01';
+const VERSION = 'native-league-stats-01';
 const CACHE = 'skittles-' + VERSION;
 const SHELL = [
  "./",
@@ -20,7 +20,7 @@ const SHELL = [
  "./manifest.webmanifest",
  "./seed.js",
  "./styles.css",
- "./data/league-stats.json"
+ "./data/league-results.json"
 ];
 
 self.addEventListener('install', e => {

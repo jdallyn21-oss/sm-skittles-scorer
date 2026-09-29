@@ -68,12 +68,12 @@ Scorers only enter a **team PIN**. Backend config is maintainer-only:
 
 ## League stats (in-app)
 
-After login, **League stats** opens the public SM Skittles league site (tables, fixtures, averages).
+After login, **League stats** shows native tables, results and player averages inside the scorer (no iframe).
 
-- **Live league site:** [https://smskittles.vercel.app/](https://smskittles.vercel.app/) — default `leagueSiteUrl` in `config.js`
-- Prefer the live embed / Open in browser. Optional snapshot: replace `data/league-stats.json` (placeholder only — no invented standings)
-- Needs network; offline scoring is unchanged
-- Scorer production: [https://skittlesscorer.vercel.app/](https://skittlesscorer.vercel.app/) (**skittless**, two s)
+- Data: bundled season results + live `GET {leagueBaseUrl}/api/cards` / Supabase `skittles_league_cards` when online
+- Division switcher · Table · Results · Averages · Refresh
+- Offline: bundled/seed results still show; scoring unchanged
+- Scorer: [https://skittlesscorer.vercel.app/](https://skittlesscorer.vercel.app/) · League site (separate): [https://smskittles.vercel.app/](https://smskittles.vercel.app/)
 
 ## League site sync (optional, after Supabase)
 

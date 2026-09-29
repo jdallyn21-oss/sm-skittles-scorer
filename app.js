@@ -90,7 +90,8 @@ function revokeSigURLs(key){
 // Scorers only enter a team PIN — no URL/key/API setup in the normal flow.
 const LEAGUE_DEFAULT_BASE = 'https://smskittles.vercel.app';
 const LEAGUE_SITE_DEFAULT = 'https://smskittles.vercel.app';
-const LEAGUE_STATS_JSON = './data/league-stats.json';
+const LEAGUE_RESULTS_JSON = './data/league-results.json';
+const LEAGUE_POINTS = {win:2, draw:1, loss:0};
 const LEAGUE_DAILY_CAP = 100; // host deploy/write budget — pair cadence stays under this
 const SUPABASE_DEFAULT_URL = 'https://dtctorijynmcdjtzmgnk.supabase.co';
 function deployConfig(){
@@ -129,7 +130,7 @@ let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false,
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
-             leagueTab:'live', leagueStatsLoading:false, leagueStatsErr:'', leagueStatsData:null };
+             leagueTab:'table', leagueDiv:null, leagueStatsLoading:false, leagueStatsErr:'', leagueStats:null, leagueStatsSource:'' };
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -387,35 +388,187 @@ function leagueBaseUrl(){
 }
 function leagueCardsUrl(){ return leagueBaseUrl()+'/api/cards'; }
 function leagueSyncEnabled(){ return !!deployConfig().leagueSync && !!leagueBaseUrl(); }
-/** Public SM Skittles league site (fixtures / tables). Admin-only in config.js. */
+/** Public SM Skittles league site URL (admin config only; scorers get a deep link, not keys). */
 function leagueSiteUrl(){
   const c=deployConfig();
   const raw=String(c.leagueSiteUrl||LEAGUE_SITE_DEFAULT).trim()||LEAGUE_SITE_DEFAULT;
   return raw.replace(/\/+$/,'');
 }
-function leagueStatsHasRows(data){
-  if(!data || typeof data!=='object') return false;
-  const tables=Array.isArray(data.tables)?data.tables:[];
-  const results=Array.isArray(data.results)?data.results:[];
-  const avgs=Array.isArray(data.playerAverages)?data.playerAverages:[];
-  const divs=Array.isArray(data.divisions)?data.divisions:[];
-  return tables.length>0 || results.length>0 || avgs.length>0 || divs.some(d=>d && (d.table||d.results));
+function emptyLeagueResults(){
+  return [{},{},{}];
 }
-async function loadLeagueStatsJson(){
-  ui.leagueStatsLoading=true; ui.leagueStatsErr=''; ui.leagueStatsData=null; render();
+function seedPlayedIntoResults(target){
+  const played=SEED.played||{};
+  Object.keys(played).forEach(key=>{
+    const parts=String(key).split('-').map(Number);
+    if(parts.length!==3||parts.some(n=>!Number.isFinite(n))) return;
+    const [div,week,mi]=parts;
+    if(div<0||div>2) return;
+    const weekRow=(SEED.weeks||[]).find(w=>w.week===week);
+    const pair=weekRow&&weekRow.matches&&weekRow.matches[mi];
+    if(!pair) return;
+    const row=played[key]||{};
+    const ht=Number(row.h), at=Number(row.a);
+    if(!Number.isFinite(ht)||!Number.isFinite(at)) return;
+    target[div]['w'+week+'m'+mi]={
+      homeNum:pair[0], awayNum:pair[1], homeTotal:ht, awayTotal:at,
+      homePlayers:[], awayPlayers:[], savedAt:null, source:'seed'
+    };
+  });
+}
+function applyBundledLeagueResults(target, data){
+  if(!data||!Array.isArray(data.results)) return;
+  data.results.forEach((divMap, div)=>{
+    if(div>2||!divMap||typeof divMap!=='object') return;
+    Object.keys(divMap).forEach(k=>{
+      const res=divMap[k];
+      if(!res||typeof res!=='object') return;
+      if(!Number.isFinite(res.homeTotal)||!Number.isFinite(res.awayTotal)) return;
+      target[div][k]=Object.assign({}, res, {
+        homePlayers:Array.isArray(res.homePlayers)?res.homePlayers:[],
+        awayPlayers:Array.isArray(res.awayPlayers)?res.awayPlayers:[],
+        source:res.source||'bundle'
+      });
+    });
+  });
+}
+function applyApiLeagueCards(target, cards){
+  (cards||[]).forEach(card=>{
+    if(!card||card.quick) return;
+    if(card.format && card.format!=='league') return;
+    const div=Number.isInteger(card.divIndex)?card.divIndex:(Number.isInteger(card.div)?card.div:null);
+    const week=card.week, mi=card.matchIndex!=null?card.matchIndex:card.mi;
+    if(div==null||div<0||div>2||!Number.isFinite(week)||!Number.isFinite(mi)) return;
+    if(!Number.isFinite(card.homeTotal)||!Number.isFinite(card.awayTotal)) return;
+    const key='w'+week+'m'+mi;
+    target[div][key]={
+      homeNum:card.homeNum, awayNum:card.awayNum,
+      homeTotal:card.homeTotal, awayTotal:card.awayTotal,
+      homePlayers:Array.isArray(card.homePlayers)?card.homePlayers:[],
+      awayPlayers:Array.isArray(card.awayPlayers)?card.awayPlayers:[],
+      savedAt:card.savedAt||card.updatedAt||null,
+      source:'live'
+    };
+  });
+}
+function computeLeagueTable(divIdx, resultsMap){
+  const teams=SEED.teams[divIdx]||[];
+  const stats=teams.map((name,i)=>({num:i+1,name,played:0,won:0,drawn:0,lost:0,pinsFor:0,pinsAgainst:0,points:0}));
+  Object.values(resultsMap||{}).forEach(res=>{
+    const home=stats[res.homeNum-1], away=stats[res.awayNum-1];
+    if(!home||!away||!home.name||!away.name) return;
+    home.played++; away.played++;
+    home.pinsFor+=res.homeTotal; home.pinsAgainst+=res.awayTotal;
+    away.pinsFor+=res.awayTotal; away.pinsAgainst+=res.homeTotal;
+    if(res.homeTotal>res.awayTotal){ home.won++; away.lost++; home.points+=LEAGUE_POINTS.win; away.points+=LEAGUE_POINTS.loss; }
+    else if(res.homeTotal<res.awayTotal){ away.won++; home.lost++; away.points+=LEAGUE_POINTS.win; home.points+=LEAGUE_POINTS.loss; }
+    else { home.drawn++; away.drawn++; home.points+=LEAGUE_POINTS.draw; away.points+=LEAGUE_POINTS.draw; }
+  });
+  return stats.filter(s=>s.name).sort((a,b)=> b.points-a.points
+    || (b.pinsFor-b.pinsAgainst)-(a.pinsFor-a.pinsAgainst)
+    || b.pinsFor-a.pinsFor
+    || a.name.localeCompare(b.name));
+}
+function listLeagueResults(divIdx, resultsMap){
+  const teams=SEED.teams[divIdx]||[];
+  return Object.keys(resultsMap||{}).map(key=>{
+    const m=/^w(\d+)m(\d+)$/.exec(key);
+    if(!m) return null;
+    const week=+m[1], mi=+m[2], res=resultsMap[key];
+    const weekRow=(SEED.weeks||[]).find(w=>w.week===week);
+    return {
+      key, week, mi, date:weekRow?weekRow.date:null, label:weekRow?weekRow.label:('Week '+week),
+      homeNum:res.homeNum, awayNum:res.awayNum,
+      homeName:teams[res.homeNum-1]||('Team '+res.homeNum),
+      awayName:teams[res.awayNum-1]||('Team '+res.awayNum),
+      homeTotal:res.homeTotal, awayTotal:res.awayTotal,
+      savedAt:res.savedAt||null, source:res.source||''
+    };
+  }).filter(Boolean).sort((a,b)=> b.week-a.week || a.mi-b.mi);
+}
+function computePlayerAverages(divIdx, resultsMap){
+  const teams=SEED.teams[divIdx]||[];
+  const index={};
+  Object.keys(resultsMap||{}).forEach(key=>{
+    const res=resultsMap[key];
+    const homeTeam=teams[res.homeNum-1], awayTeam=teams[res.awayNum-1];
+    function add(players, team){
+      (players||[]).forEach(p=>{
+        if(!p||!p.name) return;
+        const name=String(p.name).trim();
+        if(!name || name.toLowerCase()==='team total') return;
+        const pins=Number(p.pins);
+        if(!Number.isFinite(pins)) return;
+        const id=name.toLowerCase()+'|'+team;
+        if(!index[id]) index[id]={name, team, games:0, pins:0};
+        index[id].games++; index[id].pins+=pins;
+      });
+    }
+    add(res.homePlayers, homeTeam||'');
+    add(res.awayPlayers, awayTeam||'');
+  });
+  return Object.values(index).map(p=>({
+    name:p.name, team:p.team, games:p.games, pins:p.pins,
+    avg:p.games?Math.round((p.pins/p.games)*10)/10:0
+  })).sort((a,b)=> b.avg-a.avg || b.pins-a.pins || a.name.localeCompare(b.name));
+}
+async function fetchJsonQuiet(url){
+  const res=await fetch(url,{cache:'no-store'});
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  return res.json();
+}
+async function loadNativeLeagueStats(){
+  ui.leagueStatsLoading=true; ui.leagueStatsErr=''; render();
+  const results=emptyLeagueResults();
+  const sources=[];
+  seedPlayedIntoResults(results);
+  if(Object.keys(results[0]).length||Object.keys(results[1]).length||Object.keys(results[2]).length) sources.push('seed');
   try{
-    if(navigator.onLine===false) throw new Error('offline');
-    const res=await fetch(LEAGUE_STATS_JSON,{cache:'no-store'});
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const data=await res.json();
-    ui.leagueStatsData=data;
-  }catch(e){
-    ui.leagueStatsErr=e&&e.message==='offline'
-      ? 'League stats need a signal. Scoring still works offline.'
-      : 'Could not load the bundled stats file. Use the live league site, or ask Joe to upload data/league-stats.json.';
-  }finally{
-    ui.leagueStatsLoading=false; render();
+    const bundled=await fetchJsonQuiet(LEAGUE_RESULTS_JSON);
+    applyBundledLeagueResults(results, bundled);
+    sources.push('bundle');
+  }catch(e){ /* offline shell may still have seed */ }
+  let liveErr='';
+  if(navigator.onLine!==false){
+    try{
+      const api=await fetchJsonQuiet(leagueCardsUrl());
+      if(api && Array.isArray(api.cards)){
+        applyApiLeagueCards(results, api.cards);
+        if(api.source) sources.push('api:'+api.source);
+        else sources.push('api');
+      }
+    }catch(e){
+      liveErr=(e&&e.message)?e.message:'Could not reach live league scores.';
+    }
+    if(supabaseConfigured()){
+      try{
+        const cards=await supabaseRpc('skittles_league_cards', {});
+        if(Array.isArray(cards) && cards.length){
+          applyApiLeagueCards(results, cards);
+          sources.push('supabase');
+        }
+      }catch(e){ /* optional; API may already cover */ }
+    }
+  } else if(!sources.length){
+    liveErr='offline';
   }
+  const total=results.reduce((n,m)=>n+Object.keys(m).length,0);
+  ui.leagueStats={results, total};
+  ui.leagueStatsSource=sources.join('+')||'none';
+  if(!total){
+    ui.leagueStatsErr=liveErr==='offline'
+      ? 'No signal and no saved league results on this phone yet.'
+      : (liveErr || 'No league results to show yet.');
+  } else if(liveErr && liveErr!=='offline'){
+    ui.leagueStatsErr='Showing saved results — live update failed ('+liveErr+').';
+  } else {
+    ui.leagueStatsErr='';
+  }
+  ui.leagueStatsLoading=false; render();
+}
+function leagueStatsDiv(){
+  if(ui.leagueDiv===0||ui.leagueDiv===1||ui.leagueDiv===2) return ui.leagueDiv;
+  return session?session.div:0;
 }
 function isRubGroupComplete(c, groupBoxes){
   return ['home','away'].every(side=>{
@@ -1309,7 +1462,7 @@ function fixturesView(){
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
   h+=cloudSyncStatusHtml();
   h+=`<div class="card"><b>League stats</b>
-    <p class="muted small" style="margin:6px 0 12px">Live tables, fixtures and averages from the SM Skittles league site. Needs a signal — scoring still works offline.</p>
+    <p class="muted small" style="margin:6px 0 12px">Tables, results and averages for the league — built into this app. Refresh when online for the latest scores.</p>
     <button class="btn block" data-a="league-stats">View league stats</button></div>`;
   h+=`<div class="card"><b>Quick Match / Cup</b>
     <p class="muted small" style="margin:6px 0 12px">Score as your team against any opponent — league-style friendly or a cup format (Western Counties, Sid Squire, Pidler, Front Pin, Concrete).</p>
@@ -1402,74 +1555,93 @@ function quickView(){
   </div>`;
 }
 
-function leagueStatsTableHtml(rows){
-  if(!rows||!rows.length) return '';
-  const head=Object.keys(rows[0]||{});
-  if(!head.length) return '';
-  return `<div class="league-stats-scroll"><table class="league-stats-table"><thead><tr>${head.map(k=>`<th>${esc(k)}</th>`).join('')}</tr></thead><tbody>${
-    rows.map(r=>`<tr>${head.map(k=>`<td>${esc(r[k]==null?'':r[k])}</td>`).join('')}</tr>`).join('')
-  }</tbody></table></div>`;
-}
-function leagueStatsDumpBody(data){
-  if(!data) return `<p class="muted small">No dump loaded yet.</p>`;
-  if(!leagueStatsHasRows(data)){
-    const note=data.note?esc(data.note):'Waiting for Joe to upload league stats (JSON/CSV) or keep using the live league site.';
-    const when=data.updatedAt?` Last dump: ${esc(data.updatedAt)}.`:'';
-    return `<div class="banner demo">${note}${when}</div>
-      <p class="muted small" style="margin:0">Bundled file: <code>data/league-stats.json</code> (placeholder — no invented standings).</p>`;
-  }
-  let h='';
-  if(data.season) h+=`<p class="muted small" style="margin:0 0 10px">Season ${esc(data.season)}${data.updatedAt?' · updated '+esc(data.updatedAt):''}</p>`;
-  if(Array.isArray(data.tables)&&data.tables.length){
-    h+=`<b>Tables</b>${leagueStatsTableHtml(data.tables)}`;
-  }
-  if(Array.isArray(data.divisions)){
-    data.divisions.forEach((d,i)=>{
-      if(!d) return;
-      const label=d.name||d.division||('Division '+(i+1));
-      if(Array.isArray(d.table)&&d.table.length) h+=`<b style="display:block;margin-top:12px">${esc(label)}</b>${leagueStatsTableHtml(d.table)}`;
-      if(Array.isArray(d.results)&&d.results.length) h+=`<b style="display:block;margin-top:12px">${esc(label)} results</b>${leagueStatsTableHtml(d.results)}`;
-    });
-  }
-  if(Array.isArray(data.results)&&data.results.length) h+=`<b style="display:block;margin-top:12px">Results</b>${leagueStatsTableHtml(data.results)}`;
-  if(Array.isArray(data.playerAverages)&&data.playerAverages.length) h+=`<b style="display:block;margin-top:12px">Player averages</b>${leagueStatsTableHtml(data.playerAverages)}`;
-  return h||`<p class="muted small">Dump loaded but no table/result rows found.</p>`;
-}
 function leagueStatsView(){
   if(!session) return `<div class="wrap"><button class="back" data-a="back">‹ Fixtures</button><p class="muted">Log in first.</p></div>`;
-  const site=leagueSiteUrl();
-  const tab=ui.leagueTab==='dump'?'dump':'live';
-  const online=navigator.onLine!==false;
+  const div=leagueStatsDiv();
+  const tab=(ui.leagueTab==='results'||ui.leagueTab==='averages')?ui.leagueTab:'table';
+  const meName=teamName(session.div,session.num);
   let h=`<div class="wrap wide">
     <button class="back" data-a="back">‹ Fixtures</button>
     <h2 style="margin-top:16px">League stats</h2>
-    <p class="muted">South Molton league tables and results. Prefer the live site; a weekly dump is only a snapshot when Joe uploads one.</p>
-    <div class="league-stats-tabs" role="tablist" aria-label="League stats source">
-      <button type="button" class="${tab==='live'?'on':''}" data-a="league-tab" data-tab="live" role="tab" aria-selected="${tab==='live'}">Live site</button>
-      <button type="button" class="${tab==='dump'?'on':''}" data-a="league-tab" data-tab="dump" role="tab" aria-selected="${tab==='dump'}">Uploaded dump</button>
+    <p class="muted">Division tables, results and averages in the scorer. Scoring still works offline.</p>
+    <div class="league-divswitch" role="group" aria-label="Division">
+      ${[0,1,2].map(d=>`<button type="button" class="${div===d?'on':''}" data-a="league-div" data-div="${d}">Division ${d+1}</button>`).join('')}
+    </div>
+    <div class="league-stats-tabs" role="tablist" aria-label="League stats">
+      <button type="button" class="${tab==='table'?'on':''}" data-a="league-tab" data-tab="table" role="tab" aria-selected="${tab==='table'}">Table</button>
+      <button type="button" class="${tab==='results'?'on':''}" data-a="league-tab" data-tab="results" role="tab" aria-selected="${tab==='results'}">Results</button>
+      <button type="button" class="${tab==='averages'?'on':''}" data-a="league-tab" data-tab="averages" role="tab" aria-selected="${tab==='averages'}">Averages</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
+      <button type="button" class="btn quiet" data-a="league-stats-reload"${ui.leagueStatsLoading?' disabled':''} style="flex:1;min-width:140px">${ui.leagueStatsLoading?'Refreshing…':'Refresh'}</button>
     </div>`;
-  if(!online) h+=`<div class="banner bad" role="status">No signal — league stats need the network. Your match scoring still saves on this phone.</div>`;
-  if(tab==='live'){
+  if(ui.leagueStatsLoading && !ui.leagueStats){
+    h+=`<div class="card"><p class="muted" style="margin:0">Loading league stats…</p></div></div>`;
+    return h;
+  }
+  if(ui.leagueStatsErr){
+    const soft=ui.leagueStats && ui.leagueStats.total;
+    h+=`<div class="banner ${soft?'demo':'bad'}" role="status">${esc(ui.leagueStatsErr)}</div>`;
+  }
+  if(!ui.leagueStats || !ui.leagueStats.total){
+    h+=`<div class="card"><b>No results yet</b>
+      <p class="muted small" style="margin:6px 0 0">When league fixtures are scored on phones (or already on the league site), they show up here.</p></div></div>`;
+    return h;
+  }
+  const map=ui.leagueStats.results[div]||{};
+  if(tab==='table'){
+    const table=computeLeagueTable(div, map);
     h+=`<div class="card">
-      <b>SM Skittles league site</b>
-      <p class="muted small" style="margin:6px 0 12px">Fixtures, league table, player averages and alleys. Opens in the app when the phone allows; otherwise use Open in browser.</p>
-      <a class="btn block" href="${esc(site)}" target="_blank" rel="noopener noreferrer">Open in browser</a>
-      <p class="muted small" style="margin:10px 0 0;word-break:break-all">${esc(site)}</p>
-    </div>`;
-    if(online){
-      h+=`<div class="card league-embed-card">
-        <iframe class="league-embed" title="SM Skittles league site" src="${esc(site)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
-        <p class="muted small" style="margin:10px 0 0">If the page looks blank, your browser may block embeds — use Open in browser above.</p>
-      </div>`;
+      <b>Division ${div+1} table</b>
+      <p class="muted small" style="margin:6px 0 0">Win 2 pts · Draw 1 · Loss 0. Your team: <b>${esc(meName)}</b>.</p>`;
+    if(!table.length) h+=`<p class="muted" style="margin:12px 0 0">No completed results in this division yet.</p>`;
+    else {
+      h+=`<div class="league-stats-scroll"><table class="league-stats-table">
+        <thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>F</th><th>A</th><th>+/−</th><th>Pts</th></tr></thead><tbody>`;
+      table.forEach((row,i)=>{
+        const mine=session.div===div && session.num===row.num;
+        const diff=row.pinsFor-row.pinsAgainst;
+        h+=`<tr class="${mine?'league-me':''}"><td class="num">${i+1}</td><td class="name">${esc(row.name)}${mine?' <span class="tag">You</span>':''}</td>
+          <td class="num">${row.played}</td><td class="num">${row.won}</td><td class="num">${row.drawn}</td><td class="num">${row.lost}</td>
+          <td class="num">${row.pinsFor}</td><td class="num">${row.pinsAgainst}</td><td class="num">${diff>0?'+':''}${diff}</td><td class="num pts">${row.points}</td></tr>`;
+      });
+      h+=`</tbody></table></div>`;
     }
+    h+=`</div>`;
+  } else if(tab==='results'){
+    const list=listLeagueResults(div, map);
+    h+=`<div class="card"><b>Division ${div+1} results</b>`;
+    if(!list.length) h+=`<p class="muted" style="margin:12px 0 0">No results in this division yet.</p>`;
+    else {
+      list.forEach(r=>{
+        const homeMine=session.div===div&&session.num===r.homeNum;
+        const awayMine=session.div===div&&session.num===r.awayNum;
+        h+=`<div class="league-result-row">
+          <div class="muted small">${esc(r.label||('Week '+r.week))}${r.date?' · '+fmtDate(r.date):''}</div>
+          <div class="league-result-score">
+            <span class="${homeMine?'league-me-text':''}">${esc(r.homeName)}</span>
+            <b>${r.homeTotal} – ${r.awayTotal}</b>
+            <span class="${awayMine?'league-me-text':''}">${esc(r.awayName)}</span>
+          </div>
+        </div>`;
+      });
+    }
+    h+=`</div>`;
   } else {
-    h+=`<div class="card">
-      <b>Uploaded stats dump</b>
-      <p class="muted small" style="margin:6px 0 12px">Loads <code>data/league-stats.json</code> from this app. Prefer live URL or a fresh JSON/CSV upload — weekly files go stale quickly.</p>
-      <button class="btn quiet block" data-a="league-stats-reload"${ui.leagueStatsLoading?' disabled':''}>${ui.leagueStatsLoading?'Loading…':'Reload dump'}</button>
-      ${ui.leagueStatsErr?`<div class="banner bad" style="margin-top:12px" role="alert">${esc(ui.leagueStatsErr)}</div>`:''}
-      <div style="margin-top:12px">${ui.leagueStatsLoading?'<p class="muted">Loading…</p>':leagueStatsDumpBody(ui.leagueStatsData)}</div>
-    </div>`;
+    const avgs=computePlayerAverages(div, map).slice(0,40);
+    h+=`<div class="card"><b>Division ${div+1} averages</b>
+      <p class="muted small" style="margin:6px 0 0">Top averages from completed results that include player scores.</p>`;
+    if(!avgs.length) h+=`<p class="muted" style="margin:12px 0 0">No player averages yet for this division.</p>`;
+    else {
+      h+=`<div class="league-stats-scroll"><table class="league-stats-table">
+        <thead><tr><th>#</th><th>Player</th><th>Team</th><th>G</th><th>Pins</th><th>Avg</th></tr></thead><tbody>`;
+      avgs.forEach((p,i)=>{
+        h+=`<tr><td class="num">${i+1}</td><td class="name">${esc(p.name)}</td><td>${esc(p.team)}</td>
+          <td class="num">${p.games}</td><td class="num">${p.pins}</td><td class="num pts">${p.avg}</td></tr>`;
+      });
+      h+=`</tbody></table></div>`;
+    }
+    h+=`</div>`;
   }
   return h+'</div>';
 }
@@ -1727,18 +1899,24 @@ document.addEventListener('click',e=>{
     case 'supabase-flush': if(!isAdminMode()) break; flushSupabaseQueue().then(()=>render()); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
-    case 'logout': session=null; kvSave('session',null); sbUi.ready=false; sbUi.setupNeeded=false; sbUi.lastErr=null; ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; ui.leagueTab='live'; ui.leagueStatsData=null; ui.leagueStatsErr=''; render(); break;
+    case 'logout': session=null; kvSave('session',null); sbUi.ready=false; sbUi.setupNeeded=false; sbUi.lastErr=null; ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; ui.leagueTab='table'; ui.leagueDiv=null; ui.leagueStats=null; ui.leagueStatsErr=''; ui.leagueStatsSource=''; render(); break;
     case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
     case 'league-stats':
-      ui.screen='league-stats'; ui.leagueTab=ui.leagueTab||'live'; render(); window.scrollTo(0,0);
-      if(ui.leagueTab==='dump' && !ui.leagueStatsData && !ui.leagueStatsLoading) loadLeagueStatsJson();
+      ui.screen='league-stats';
+      ui.leagueTab=(ui.leagueTab==='results'||ui.leagueTab==='averages')?ui.leagueTab:'table';
+      if(ui.leagueDiv==null && session) ui.leagueDiv=session.div;
+      render(); window.scrollTo(0,0);
+      loadNativeLeagueStats();
       break;
     case 'league-tab': {
-      const next=D.tab==='dump'?'dump':'live';
+      const next=D.tab==='results'?'results':(D.tab==='averages'?'averages':'table');
       ui.leagueTab=next; render();
-      if(next==='dump' && !ui.leagueStatsData && !ui.leagueStatsLoading) loadLeagueStatsJson();
       break; }
-    case 'league-stats-reload': loadLeagueStatsJson(); break;
+    case 'league-div': {
+      const d=+D.div;
+      if(d===0||d===1||d===2){ ui.leagueDiv=d; render(); }
+      break; }
+    case 'league-stats-reload': loadNativeLeagueStats(); break;
     case 'qm-side': {
       const next=String(D.side||'').toLowerCase()==='away'?'away':'home';
       ui.qmSide=next; ui.qmMsg=''; render(); break; }
