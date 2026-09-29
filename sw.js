@@ -1,5 +1,5 @@
 /* Skittles Scorer service worker. Keeps the whole app on the phone so it opens with no signal. */
-const VERSION = 'fines-per-match-01';
+const VERSION = 'league-stats-01';
 const CACHE = 'skittles-' + VERSION;
 const SHELL = [
  "./",
@@ -19,7 +19,8 @@ const SHELL = [
  "./index.html",
  "./manifest.webmanifest",
  "./seed.js",
- "./styles.css"
+ "./styles.css",
+ "./data/league-stats.json"
 ];
 
 self.addEventListener('install', e => {

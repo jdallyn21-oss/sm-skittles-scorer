@@ -88,7 +88,9 @@ function revokeSigURLs(key){
 
 // Backend + match defaults: admin/deploy only via config.js (window.SKITTLES_CONFIG).
 // Scorers only enter a team PIN — no URL/key/API setup in the normal flow.
-const LEAGUE_DEFAULT_BASE = 'http://127.0.0.1:47331';
+const LEAGUE_DEFAULT_BASE = 'https://smskittles.vercel.app';
+const LEAGUE_SITE_DEFAULT = 'https://smskittles.vercel.app';
+const LEAGUE_STATS_JSON = './data/league-stats.json';
 const LEAGUE_DAILY_CAP = 100; // host deploy/write budget — pair cadence stays under this
 const SUPABASE_DEFAULT_URL = 'https://dtctorijynmcdjtzmgnk.supabase.co';
 function deployConfig(){
@@ -126,7 +128,8 @@ let syncUi = {pending:0, lastOk:null, lastErr:null, flushing:false};
 let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
-             qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league' };
+             qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
+             leagueTab:'live', leagueStatsLoading:false, leagueStatsErr:'', leagueStatsData:null };
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -384,6 +387,36 @@ function leagueBaseUrl(){
 }
 function leagueCardsUrl(){ return leagueBaseUrl()+'/api/cards'; }
 function leagueSyncEnabled(){ return !!deployConfig().leagueSync && !!leagueBaseUrl(); }
+/** Public SM Skittles league site (fixtures / tables). Admin-only in config.js. */
+function leagueSiteUrl(){
+  const c=deployConfig();
+  const raw=String(c.leagueSiteUrl||LEAGUE_SITE_DEFAULT).trim()||LEAGUE_SITE_DEFAULT;
+  return raw.replace(/\/+$/,'');
+}
+function leagueStatsHasRows(data){
+  if(!data || typeof data!=='object') return false;
+  const tables=Array.isArray(data.tables)?data.tables:[];
+  const results=Array.isArray(data.results)?data.results:[];
+  const avgs=Array.isArray(data.playerAverages)?data.playerAverages:[];
+  const divs=Array.isArray(data.divisions)?data.divisions:[];
+  return tables.length>0 || results.length>0 || avgs.length>0 || divs.some(d=>d && (d.table||d.results));
+}
+async function loadLeagueStatsJson(){
+  ui.leagueStatsLoading=true; ui.leagueStatsErr=''; ui.leagueStatsData=null; render();
+  try{
+    if(navigator.onLine===false) throw new Error('offline');
+    const res=await fetch(LEAGUE_STATS_JSON,{cache:'no-store'});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    ui.leagueStatsData=data;
+  }catch(e){
+    ui.leagueStatsErr=e&&e.message==='offline'
+      ? 'League stats need a signal. Scoring still works offline.'
+      : 'Could not load the bundled stats file. Use the live league site, or ask Joe to upload data/league-stats.json.';
+  }finally{
+    ui.leagueStatsLoading=false; render();
+  }
+}
 function isRubGroupComplete(c, groupBoxes){
   return ['home','away'].every(side=>{
     const named=c.players[side].filter(p=>p.name);
@@ -1236,7 +1269,7 @@ function settingsView(){
     <h2 style="margin-top:16px">Admin</h2>
     <p class="muted small">Maintainer only. Backend keys live in <code>config.js</code> — not on this screen. Scorers only use a team PIN.</p>
     <p class="muted small" style="margin:10px 0">Supabase: ${supabaseConfigured()?'configured ('+esc(sb.url)+')':'not configured — paste anon key in config.js'} · pending ${sbUi.pending||0}</p>
-    <p class="muted small" style="margin:0 0 14px">League API: ${leagueOn?'on → '+esc(leagueCardsUrl()):'off (set leagueSync in config.js)'} · pending ${syncUi.pending||0}</p>
+    <p class="muted small" style="margin:0 0 14px">League site: ${esc(leagueSiteUrl())} · API: ${leagueOn?'on → '+esc(leagueCardsUrl()):'off (set leagueSync in config.js)'} · pending ${syncUi.pending||0}</p>
     <button class="radio ${r===2?'on':''}" data-a="rubs" data-v="2"><span class="dot"></span><span><b>Double rubs</b><br><span class="muted small">Boxes in pairs (South Molton).</span></span></button>
     <button class="radio ${r===1?'on':''}" data-a="rubs" data-v="1"><span class="dot"></span><span><b>Single rubs</b><br><span class="muted small">Each box is its own rub.</span></span></button>
     <button class="radio ${settings.fines?'on':''}" data-a="fines"><span class="dot"></span><span><b>Default: mark fines</b><br><span class="muted small">New cards start with the Fine button on. Scorers can still toggle per match on the card.</span></span></button>
@@ -1250,6 +1283,9 @@ function fixturesView(){
     <div><h2 style="margin:0">${esc(teamName(d,n))}</h2><span class="muted small">Division ${d+1}</span></div>
     <button class="back" data-a="logout">Log out</button></div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
+  h+=`<div class="card"><b>League stats</b>
+    <p class="muted small" style="margin:6px 0 12px">Live tables, fixtures and averages from the SM Skittles league site. Needs a signal — scoring still works offline.</p>
+    <button class="btn block" data-a="league-stats">View league stats</button></div>`;
   h+=`<div class="card"><b>Quick Match / Cup</b>
     <p class="muted small" style="margin:6px 0 12px">Score as your team against any opponent — league-style friendly or a cup format (Western Counties, Sid Squire, Pidler, Front Pin, Concrete).</p>
     <button class="btn block" data-a="quick">Set up a Quick Match or Cup</button></div>`;
@@ -1339,6 +1375,78 @@ function quickView(){
       <button class="btn block" data-a="quick-start" style="margin-top:8px">Start scoring</button>
     </div>
   </div>`;
+}
+
+function leagueStatsTableHtml(rows){
+  if(!rows||!rows.length) return '';
+  const head=Object.keys(rows[0]||{});
+  if(!head.length) return '';
+  return `<div class="league-stats-scroll"><table class="league-stats-table"><thead><tr>${head.map(k=>`<th>${esc(k)}</th>`).join('')}</tr></thead><tbody>${
+    rows.map(r=>`<tr>${head.map(k=>`<td>${esc(r[k]==null?'':r[k])}</td>`).join('')}</tr>`).join('')
+  }</tbody></table></div>`;
+}
+function leagueStatsDumpBody(data){
+  if(!data) return `<p class="muted small">No dump loaded yet.</p>`;
+  if(!leagueStatsHasRows(data)){
+    const note=data.note?esc(data.note):'Waiting for Joe to upload league stats (JSON/CSV) or keep using the live league site.';
+    const when=data.updatedAt?` Last dump: ${esc(data.updatedAt)}.`:'';
+    return `<div class="banner demo">${note}${when}</div>
+      <p class="muted small" style="margin:0">Bundled file: <code>data/league-stats.json</code> (placeholder — no invented standings).</p>`;
+  }
+  let h='';
+  if(data.season) h+=`<p class="muted small" style="margin:0 0 10px">Season ${esc(data.season)}${data.updatedAt?' · updated '+esc(data.updatedAt):''}</p>`;
+  if(Array.isArray(data.tables)&&data.tables.length){
+    h+=`<b>Tables</b>${leagueStatsTableHtml(data.tables)}`;
+  }
+  if(Array.isArray(data.divisions)){
+    data.divisions.forEach((d,i)=>{
+      if(!d) return;
+      const label=d.name||d.division||('Division '+(i+1));
+      if(Array.isArray(d.table)&&d.table.length) h+=`<b style="display:block;margin-top:12px">${esc(label)}</b>${leagueStatsTableHtml(d.table)}`;
+      if(Array.isArray(d.results)&&d.results.length) h+=`<b style="display:block;margin-top:12px">${esc(label)} results</b>${leagueStatsTableHtml(d.results)}`;
+    });
+  }
+  if(Array.isArray(data.results)&&data.results.length) h+=`<b style="display:block;margin-top:12px">Results</b>${leagueStatsTableHtml(data.results)}`;
+  if(Array.isArray(data.playerAverages)&&data.playerAverages.length) h+=`<b style="display:block;margin-top:12px">Player averages</b>${leagueStatsTableHtml(data.playerAverages)}`;
+  return h||`<p class="muted small">Dump loaded but no table/result rows found.</p>`;
+}
+function leagueStatsView(){
+  if(!session) return `<div class="wrap"><button class="back" data-a="back">‹ Fixtures</button><p class="muted">Log in first.</p></div>`;
+  const site=leagueSiteUrl();
+  const tab=ui.leagueTab==='dump'?'dump':'live';
+  const online=navigator.onLine!==false;
+  let h=`<div class="wrap wide">
+    <button class="back" data-a="back">‹ Fixtures</button>
+    <h2 style="margin-top:16px">League stats</h2>
+    <p class="muted">South Molton league tables and results. Prefer the live site; a weekly dump is only a snapshot when Joe uploads one.</p>
+    <div class="league-stats-tabs" role="tablist" aria-label="League stats source">
+      <button type="button" class="${tab==='live'?'on':''}" data-a="league-tab" data-tab="live" role="tab" aria-selected="${tab==='live'}">Live site</button>
+      <button type="button" class="${tab==='dump'?'on':''}" data-a="league-tab" data-tab="dump" role="tab" aria-selected="${tab==='dump'}">Uploaded dump</button>
+    </div>`;
+  if(!online) h+=`<div class="banner bad" role="status">No signal — league stats need the network. Your match scoring still saves on this phone.</div>`;
+  if(tab==='live'){
+    h+=`<div class="card">
+      <b>SM Skittles league site</b>
+      <p class="muted small" style="margin:6px 0 12px">Fixtures, league table, player averages and alleys. Opens in the app when the phone allows; otherwise use Open in browser.</p>
+      <a class="btn block" href="${esc(site)}" target="_blank" rel="noopener noreferrer">Open in browser</a>
+      <p class="muted small" style="margin:10px 0 0;word-break:break-all">${esc(site)}</p>
+    </div>`;
+    if(online){
+      h+=`<div class="card league-embed-card">
+        <iframe class="league-embed" title="SM Skittles league site" src="${esc(site)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+        <p class="muted small" style="margin:10px 0 0">If the page looks blank, your browser may block embeds — use Open in browser above.</p>
+      </div>`;
+    }
+  } else {
+    h+=`<div class="card">
+      <b>Uploaded stats dump</b>
+      <p class="muted small" style="margin:6px 0 12px">Loads <code>data/league-stats.json</code> from this app. Prefer live URL or a fresh JSON/CSV upload — weekly files go stale quickly.</p>
+      <button class="btn quiet block" data-a="league-stats-reload"${ui.leagueStatsLoading?' disabled':''}>${ui.leagueStatsLoading?'Loading…':'Reload dump'}</button>
+      ${ui.leagueStatsErr?`<div class="banner bad" style="margin-top:12px" role="alert">${esc(ui.leagueStatsErr)}</div>`:''}
+      <div style="margin-top:12px">${ui.leagueStatsLoading?'<p class="muted">Loading…</p>':leagueStatsDumpBody(ui.leagueStatsData)}</div>
+    </div>`;
+  }
+  return h+'</div>';
 }
 
 function boxHTML(c,side,slot,box,locked){
@@ -1496,6 +1604,7 @@ function render(){
   else if(ui.screen==='settings') h+=settingsView();
   else if(ui.screen==='fixtures') h+=fixturesView();
   else if(ui.screen==='quick') h+=quickView();
+  else if(ui.screen==='league-stats') h+=leagueStatsView();
   else if(ui.screen==='card') h+=cardView()+(ui.sel?padSheet():'')+(ui.sheet?rosterSheet():'')+(ui.moveSheet?moveSheet():'');
   $app.innerHTML=h;
   if(ui.sel){ scrollToSel(); requestAnimationFrame(scrollToSel); }
@@ -1593,8 +1702,18 @@ document.addEventListener('click',e=>{
     case 'supabase-flush': if(!isAdminMode()) break; flushSupabaseQueue().then(()=>render()); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
-    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; render(); break;
+    case 'logout': session=null; kvSave('session',null); ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; ui.leagueTab='live'; ui.leagueStatsData=null; ui.leagueStatsErr=''; render(); break;
     case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
+    case 'league-stats':
+      ui.screen='league-stats'; ui.leagueTab=ui.leagueTab||'live'; render(); window.scrollTo(0,0);
+      if(ui.leagueTab==='dump' && !ui.leagueStatsData && !ui.leagueStatsLoading) loadLeagueStatsJson();
+      break;
+    case 'league-tab': {
+      const next=D.tab==='dump'?'dump':'live';
+      ui.leagueTab=next; render();
+      if(next==='dump' && !ui.leagueStatsData && !ui.leagueStatsLoading) loadLeagueStatsJson();
+      break; }
+    case 'league-stats-reload': loadLeagueStatsJson(); break;
     case 'qm-side': {
       const next=String(D.side||'').toLowerCase()==='away'?'away':'home';
       ui.qmSide=next; ui.qmMsg=''; render(); break; }

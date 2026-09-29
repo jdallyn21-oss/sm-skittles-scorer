@@ -11,8 +11,11 @@ window.SKITTLES_CONFIG = {
   supabaseUrl: 'https://dtctorijynmcdjtzmgnk.supabase.co',
   supabaseAnonKey: '', // PASTE_ANON_KEY_HERE
 
+  // Public league site for the in-app League stats screen
+  leagueSiteUrl: 'https://smskittles.vercel.app',
+
   leagueSync: false,
-  leagueBaseUrl: 'http://127.0.0.1:47331',
+  leagueBaseUrl: 'https://smskittles.vercel.app',
 
   rubs: 2,
   fines: true

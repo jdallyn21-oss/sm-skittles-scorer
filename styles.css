@@ -202,3 +202,16 @@ body.has-sheet .strip .sc{font-size:26px}
 .oname.empty{color:var(--chalk-dim);font-size:20px}
 .arr{flex:none;width:58px;min-height:56px;border:2px solid var(--chalk-line);background:transparent;color:var(--chalk);border-radius:8px;font-size:24px}
 .arr[disabled]{opacity:.3}
+
+/* League stats (live site embed + optional dump) */
+.league-stats-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 16px}
+.league-stats-tabs button{flex:1;min-width:140px;min-height:48px;border-radius:8px;border:2px solid var(--line);background:var(--card);color:var(--ink);font-weight:700;font-size:16px}
+.league-stats-tabs button.on{background:var(--felt);border-color:var(--felt);color:var(--on-felt)}
+.league-embed-card{padding:10px}
+.league-embed{display:block;width:100%;min-height:70vh;height:min(78vh,720px);border:1px solid var(--line);border-radius:6px;background:#fff}
+.league-stats-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px}
+.league-stats-table{width:100%;border-collapse:collapse;font-size:14px}
+.league-stats-table th,.league-stats-table td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.league-stats-table th{font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft)}
+.league-stats-table tr:last-child td{border-bottom:0}
+a.btn{text-decoration:none}

@@ -66,6 +66,15 @@ Scorers only enter a **team PIN**. Backend config is maintainer-only:
 - **Or** paste the anon key into committed `config.js` (never `service_role` / DB password)
 - Run SQL in `supabase/migrations/` then `supabase/seed_teams.sql` in the Supabase SQL editor (Joe only)
 
+## League stats (in-app)
+
+After login, **League stats** opens the public SM Skittles league site (tables, fixtures, averages).
+
+- **Live league site:** [https://smskittles.vercel.app/](https://smskittles.vercel.app/) — default `leagueSiteUrl` in `config.js`
+- Prefer the live embed / Open in browser. Optional snapshot: replace `data/league-stats.json` (placeholder only — no invented standings)
+- Needs network; offline scoring is unchanged
+- Scorer production: [https://skittlesscorer.vercel.app/](https://skittlesscorer.vercel.app/) (**skittless**, two s)
+
 ## League site sync (optional, after Supabase)
 
 Also admin-only via `config.js` (`leagueSync`, `leagueBaseUrl`). When enabled, completing a rub **pair** enqueues `POST {base}/api/cards`. Cap: 100 POSTs/day.

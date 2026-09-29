@@ -12,9 +12,12 @@ window.SKITTLES_CONFIG = {
   supabaseUrl: 'https://dtctorijynmcdjtzmgnk.supabase.co',
   supabaseAnonKey: '', // PASTE_ANON_KEY_HERE (or set SUPABASE_ANON_KEY on Vercel)
 
+  // Public league site (fixtures, tables, averages) — scorers open this from League stats.
+  leagueSiteUrl: 'https://smskittles.vercel.app',
+
   // Optional league site /api/cards (after Supabase). Off until Joe enables it.
   leagueSync: false,
-  leagueBaseUrl: 'http://127.0.0.1:47331',
+  leagueBaseUrl: 'https://smskittles.vercel.app',
 
   // Match rules baked into the deploy (South Molton = double rubs)
   rubs: 2,
