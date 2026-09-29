@@ -127,6 +127,8 @@ const sigURLs = {};       // cardKey -> {home?, away?} object URLs for captain s
 let syncMeta = {day:'', count:0}; // daily league POST budget tracker
 let syncUi = {pending:0, lastOk:null, lastErr:null, flushing:false};
 let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false, ready:false, setupNeeded:false};
+/** Live/bundled league scorelines keyed by fixture card key `div-week-mi` → {h,a,source}. */
+let leaguePlayedCache = {};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
@@ -180,8 +182,37 @@ function fixturesFor(d,n){
     const mi=w.matches.findIndex(m=>m[0]===n||m[1]===n);
     if(mi<0) return {week:w.week,date:w.date,bye:true};
     const m=w.matches[mi], key=d+'-'+w.week+'-'+mi;
-    return {week:w.week,date:w.date,mi,home:m[0],away:m[1],key,played:SEED.played[key]||null,div:d};
+    return {week:w.week,date:w.date,mi,home:m[0],away:m[1],key,played:fixtureResultForKey(key),div:d};
   });
+}
+function rebuildLeaguePlayedCache(resultsByDiv){
+  const next={};
+  (resultsByDiv||[]).forEach((divMap, div)=>{
+    if(!divMap||typeof divMap!=='object') return;
+    Object.keys(divMap).forEach(rk=>{
+      const m=/^w(\d+)m(\d+)$/.exec(rk);
+      if(!m) return;
+      const res=divMap[rk];
+      if(!res||!Number.isFinite(res.homeTotal)||!Number.isFinite(res.awayTotal)) return;
+      const key=div+'-'+m[1]+'-'+m[2];
+      next[key]={h:res.homeTotal, a:res.awayTotal, source:res.source||'league'};
+    });
+  });
+  leaguePlayedCache=next;
+}
+/** Best-known scoreline for a league fixture key: live/bundled cache, then SEED.played, then local submitted card. */
+function fixtureResultForKey(key){
+  if(leaguePlayedCache[key]) return leaguePlayedCache[key];
+  const seed=SEED.played&&SEED.played[key];
+  if(seed && Number.isFinite(seed.h) && Number.isFinite(seed.a)) return {h:seed.h, a:seed.a, source:'seed'};
+  const c=cards[key];
+  if(c && !c.quick && (c.status==='submitted' || (c.players&&(teamPins(c.players.home)+teamPins(c.players.away)>0)))){
+    const sc=matchScore(c);
+    if(Number.isFinite(sc.home)&&Number.isFinite(sc.away)&&(sc.home+sc.away>0||sc.pins.home+sc.pins.away>0)){
+      return {h:sc.mode==='pins'?sc.home:sc.pins.home, a:sc.mode==='pins'?sc.away:sc.pins.away, source:c.status==='submitted'?'local':'local-draft'};
+    }
+  }
+  return null;
 }
 function nextFixture(list){
   const t=todayISO();
@@ -517,8 +548,9 @@ async function fetchJsonQuiet(url){
   if(!res.ok) throw new Error('HTTP '+res.status);
   return res.json();
 }
-async function loadNativeLeagueStats(){
-  ui.leagueStatsLoading=true; ui.leagueStatsErr=''; render();
+async function loadNativeLeagueStats(opts){
+  const quiet=!!(opts&&opts.quiet);
+  if(!quiet){ ui.leagueStatsLoading=true; ui.leagueStatsErr=''; render(); }
   const results=emptyLeagueResults();
   const sources=[];
   seedPlayedIntoResults(results);
@@ -542,9 +574,9 @@ async function loadNativeLeagueStats(){
     }
     if(supabaseConfigured()){
       try{
-        const cards=await supabaseRpc('skittles_league_cards', {});
-        if(Array.isArray(cards) && cards.length){
-          applyApiLeagueCards(results, cards);
+        const remote=await supabaseRpc('skittles_league_cards', {});
+        if(Array.isArray(remote) && remote.length){
+          applyApiLeagueCards(results, remote);
           sources.push('supabase');
         }
       }catch(e){ /* optional; API may already cover */ }
@@ -555,6 +587,7 @@ async function loadNativeLeagueStats(){
   const total=results.reduce((n,m)=>n+Object.keys(m).length,0);
   ui.leagueStats={results, total};
   ui.leagueStatsSource=sources.join('+')||'none';
+  rebuildLeaguePlayedCache(results);
   if(!total){
     ui.leagueStatsErr=liveErr==='offline'
       ? 'No signal and no saved league results on this phone yet.'
@@ -1503,12 +1536,16 @@ function fixturesView(){
   list.forEach(f=>{
     if(f.bye){ h+=`<div class="frow"><span>${fmtDate(f.date)} · Week ${f.week}</span><span class="muted">Bye</span></div>`; return; }
     const c=cards[f.key], home=f.home===n, opp=teamName(d,home?f.away:f.home);
+    const played=f.played||fixtureResultForKey(f.key);
     let st='<span class="muted">Not started</span>';
-    if(f.played) st=`<span class="state-done">${f.played.h} – ${f.played.a} on the site</span>`;
-    else if(c&&c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
+    if(played){
+      const where=played.source==='local'||played.source==='local-draft'?'on this phone':'on the site';
+      st=`<span class="state-done">${played.h} – ${played.a} ${where}</span>`;
+    } else if(c&&c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
     else if(c) st='<span class="state-wait">In progress</span>';
     const inner=`<span><b>${fmtDate(f.date)}</b> · Week ${f.week}<br><span class="muted small">${home?'Home':'Away'} v ${esc(opp)}</span></span>${st}`;
-    h+= f.played ? `<div class="frow">${inner}</div>` : `<button class="frow" data-a="open" data-key="${f.key}">${inner}</button>`;
+    // Played fixtures stay tappable so either team can still open/fix the card
+    h+=`<button class="frow" data-a="open" data-key="${f.key}">${inner}</button>`;
   });
   return h+'</div></div>';
 }
@@ -1871,6 +1908,7 @@ function tryLogin(){
     kvSave('session',session); requestPersist();
     ui.pin=''; ui.pinMsg=''; ui.tries=0; ui.screen='fixtures';
     render(); window.scrollTo(0,0);
+    loadNativeLeagueStats({quiet:true});
     // Pull shared team cards into IndexedDB so a new device sees prior matches
     pullSupabaseTeamData().then(r=>{
       render();
