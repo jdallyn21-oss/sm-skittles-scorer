@@ -73,7 +73,7 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .state-win{color:var(--good);font-weight:700;white-space:nowrap}
 .state-loss{color:var(--bad);font-weight:700;white-space:nowrap}
 .state-draw{color:var(--brass);font-weight:700;white-space:nowrap}
-.result-mark{display:inline-block;min-width:1.1em;margin-right:2px}
+.result-mark{display:inline-block;min-width:1.1em;margin-left:2px}
 .state-wait{color:var(--brass);font-weight:700}
 
 /* score card */

@@ -223,16 +223,17 @@ function fixtureResultForKey(key){
   }
   return null;
 }
-/** Scoreline for All fixtures: user's pins first, then opponent, plus W/L/D from their view. */
-function fixtureScorelineForUser(f, played, userNum){
-  if(!played) return null;
+/** All fixtures result HTML: user pins first, then W/L/D coloured from their view. */
+function fixtureResultHtml(f, played, userNum){
+  if(!played) return '';
   const userIsHome=f.home===userNum;
   const mine=userIsHome?played.h:played.a;
   const theirs=userIsHome?played.a:played.h;
   let outcome='D', cls='state-draw';
   if(mine>theirs){ outcome='W'; cls='state-win'; }
   else if(mine<theirs){ outcome='L'; cls='state-loss'; }
-  return {text:mine+' – '+theirs, outcome, cls};
+  // Always return an HTML string — never an object (esc(object) → "[object Object]").
+  return `<span class="${cls}">${esc(mine+' – '+theirs)} <b class="result-mark">${outcome}</b></span>`;
 }
 function nextFixture(list){
   const t=todayISO();
@@ -1566,8 +1567,7 @@ function fixturesView(){
     const played=fixtureResultForKey(f.key);
     let st='<span class="muted">Not started</span>';
     if(played){
-      const line=fixtureScorelineForUser(f, played, n);
-      st=`<span class="${line.cls}"><b class="result-mark">${line.outcome}</b> ${esc(line.text)}</span>`;
+      st=fixtureResultHtml(f, played, n);
     } else if(c&&c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
     else if(c) st='<span class="state-wait">In progress</span>';
     const inner=`<span><b>${fmtDate(f.date)}</b> · Week ${f.week}<br><span class="muted small">${home?'Home':'Away'} v ${esc(opp)}</span></span>${st}`;
