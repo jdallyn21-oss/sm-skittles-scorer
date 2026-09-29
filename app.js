@@ -1566,7 +1566,8 @@ function fixturesView(){
     const played=fixtureResultForKey(f.key);
     let st='<span class="muted">Not started</span>';
     if(played){
-      st=`<span class="state-done">${esc(fixtureScorelineForUser(f, played, n))}</span>`;
+      const line=fixtureScorelineForUser(f, played, n);
+      st=`<span class="${line.cls}"><b class="result-mark">${line.outcome}</b> ${esc(line.text)}</span>`;
     } else if(c&&c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
     else if(c) st='<span class="state-wait">In progress</span>';
     const inner=`<span><b>${fmtDate(f.date)}</b> · Week ${f.week}<br><span class="muted small">${home?'Home':'Away'} v ${esc(opp)}</span></span>${st}`;
