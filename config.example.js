@@ -15,5 +15,5 @@ window.SKITTLES_CONFIG = {
   leagueBaseUrl: 'http://127.0.0.1:47331',
 
   rubs: 2,
-  fines: false
+  fines: true
 };

@@ -36,6 +36,8 @@ const url = (firstEnv('SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'VITE_SUPABASE
 const anon = firstEnv('SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'VITE_SUPABASE_ANON_KEY');
 const leagueSync = ['1', 'true', 'yes', 'on'].includes(String(process.env.LEAGUE_SYNC || '').toLowerCase());
 const leagueBase = (firstEnv('LEAGUE_BASE_URL') || 'http://127.0.0.1:47331').replace(/\/+$/, '');
+// Default fines on; set FINES=false on Vercel to deploy with fines off
+const finesDefault = !['0', 'false', 'no', 'off'].includes(String(process.env.FINES != null ? process.env.FINES : 'true').toLowerCase());
 
 if (!anon) {
   console.log('[inject-config] No SUPABASE_ANON_KEY in env — leaving config.js unchanged');
@@ -57,9 +59,9 @@ window.SKITTLES_CONFIG = {
   leagueSync: ${leagueSync},
   leagueBaseUrl: '${esc(leagueBase)}',
   rubs: 2,
-  fines: false
+  fines: ${finesDefault}
 };
 `;
 
 fs.writeFileSync(configPath, body, 'utf8');
-console.log('[inject-config] Wrote config.js', { supabaseUrl: url, anonKeyChars: anon.length, leagueSync });
+console.log('[inject-config] Wrote config.js', { supabaseUrl: url, anonKeyChars: anon.length, leagueSync, fines: finesDefault });

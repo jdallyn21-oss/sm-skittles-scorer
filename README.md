@@ -53,6 +53,10 @@ On a completed match card (submitted, or fully ready to submit), use **Share res
 **Production:** [https://skittlesscorer.vercel.app](https://skittlesscorer.vercel.app/) — spelling **skittless** (two s).  
 Typo `skittlescorer.vercel.app` (one s) 404s. Keep Deployment Protection **off** for Production so phones open without a Vercel login.
 
+## Fines
+
+Fines are **on by default**. On a match card, scorers can toggle **Mark fines** — that shows a Fine button on the score pad and a brass corner mark on the box (display only; score unchanged). Marked fines also appear as `*` next to the score on the result PDF. Deploy default: `config.js` → `fines: true` (or Vercel env `FINES=false` to default off).
+
 ## Supabase (shared team data) — admin deploy
 
 Scorers only enter a **team PIN**. Backend config is maintainer-only:

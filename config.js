@@ -18,5 +18,6 @@ window.SKITTLES_CONFIG = {
 
   // Match rules baked into the deploy (South Molton = double rubs)
   rubs: 2,
-  fines: false
+  // Fines on by default — scorers can toggle per match on the card
+  fines: true
 };

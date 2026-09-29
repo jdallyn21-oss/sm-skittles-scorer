@@ -103,12 +103,19 @@ function deploySupabase(){
 function applyDeploySettings(){
   const c=deployConfig();
   if(c.rubs===1||c.rubs===2) settings.rubs=c.rubs;
+  // Deploy default for new cards; scorers can still toggle per match
   if(typeof c.fines==='boolean') settings.fines=c.fines;
+  else settings.fines=true;
 }
 function isAdminMode(){
   try{ return new URLSearchParams(location.search||'').has('admin'); }catch(e){ return false; }
 }
-let settings = { rubs:2, fines:false };
+/** Per-match fines flag (defaults to deploy settings.fines). */
+function finesEnabled(c){
+  if(c && typeof c.fines==='boolean') return c.fines;
+  return !!settings.fines;
+}
+let settings = { rubs:2, fines:true };
 let session  = null;      // {div,num,pin,teamKey}
 let cards    = {};        // by fixture key
 let extra    = {};        // players added on the phone
@@ -214,6 +221,7 @@ function ensureCard(f){
     const fmt=FORMATS[f.format]||FORMATS.league;
     cards[f.key]={key:f.key,div:f.div,week:f.week,mi:f.mi,date:f.date,home:f.home,away:f.away,format:fmt.id,
       players:{home:blankSide(fmt),away:blankSide(fmt)},hasPhoto:false,hasSigHome:false,hasSigAway:false,
+      fines:!!settings.fines,
       status:'draft',savedAt:null,submittedAt:null,by:null};
     if(f.quick){ cards[f.key].quick=true; cards[f.key].homeDiv=f.homeDiv; cards[f.key].awayDiv=f.awayDiv; }
     persist(f.key);
@@ -744,11 +752,13 @@ function matchPdfLines(c){
   const colW=4, totW=5;
   const tableW=nameW + rubs*colW + totW;
   const rule=(ch)=>({t:ch.repeat(tableW), mono:true, size:8, gap:2});
-  const rowPlayer=(label, boxes, tot)=>{
+  const rowPlayer=(label, boxes, tot, fines)=>{
     let t=pdfPad(label,nameW);
     for(let i=0;i<rubs;i++){
       const v=boxes[i];
-      t+=pdfPad(v===null||v===undefined?'-':String(v), colW, 'r');
+      let cell=v===null||v===undefined?'-':String(v);
+      if(fines && fines[i] && cell!=='-') cell=cell+'*'; // * = fine (display only; score unchanged)
+      t+=pdfPad(cell, colW, 'r');
     }
     t+=pdfPad(tot===null||tot===undefined?'-':String(tot), totW, 'r');
     return {t, mono:true, size:8, gap:2};
@@ -790,10 +800,13 @@ function matchPdfLines(c){
     lines.push(rule('-'));
     lines.push(hdr);
     lines.push(rule('-'));
+    let anyFine=false;
     list.forEach(p=>{
-      lines.push(rowPlayer(playerLabel(p), p.boxes, p.name?pinsOf(p):null));
+      if(p.fine && p.fine.some(Boolean)) anyFine=true;
+      lines.push(rowPlayer(playerLabel(p), p.boxes, p.name?pinsOf(p):null, p.fine));
     });
     lines.push(rule('-'));
+    if(anyFine) lines.push({t:'* = fine (display only; does not change the score)', size:8, gap:2});
     if(formatUsesPairRubs(c)){
       // Show paired rub scores under the grid (3 values for 6 rubs)
       let rubLine=pdfPad('Rub score', nameW);
@@ -1226,7 +1239,7 @@ function settingsView(){
     <p class="muted small" style="margin:0 0 14px">League API: ${leagueOn?'on → '+esc(leagueCardsUrl()):'off (set leagueSync in config.js)'} · pending ${syncUi.pending||0}</p>
     <button class="radio ${r===2?'on':''}" data-a="rubs" data-v="2"><span class="dot"></span><span><b>Double rubs</b><br><span class="muted small">Boxes in pairs (South Molton).</span></span></button>
     <button class="radio ${r===1?'on':''}" data-a="rubs" data-v="1"><span class="dot"></span><span><b>Single rubs</b><br><span class="muted small">Each box is its own rub.</span></span></button>
-    <button class="radio ${settings.fines?'on':''}" data-a="fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Fine button on the keypad (display only).</span></span></button>
+    <button class="radio ${settings.fines?'on':''}" data-a="fines"><span class="dot"></span><span><b>Default: mark fines</b><br><span class="muted small">New cards start with the Fine button on. Scorers can still toggle per match on the card.</span></span></button>
     <button class="btn quiet block" data-a="league-flush" style="margin-top:16px">Retry league queue</button>
     <button class="btn quiet block" data-a="supabase-flush" style="margin-top:8px">Retry Supabase queue</button>
   </div>`;
@@ -1332,8 +1345,9 @@ function boxHTML(c,side,slot,box,locked){
   const p=c.players[side][slot], v=p.boxes[box];
   const sel=ui.sel&&ui.sel.side===side&&ui.sel.slot===slot&&ui.sel.box===box;
   const pair=formatUsesPairRubs(c);
-  const cls=['box', pair&&box%2===0&&box>0?'gs':'', sel?'sel':'', isSpare(p,box)?'spare':'', settings.fines&&p.fine[box]?'fine':''].join(' ');
-  return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}">${v===null?'':v}</button>`;
+  const cls=['box', pair&&box%2===0&&box>0?'gs':'', sel?'sel':'', isSpare(p,box)?'spare':'', p.fine[box]?'fine':''].join(' ');
+  const fineNote=p.fine[box]?', fine':'';
+  return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}${fineNote}">${v===null?'':v}</button>`;
 }
 function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
@@ -1387,6 +1401,7 @@ function cardView(){
       <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
       <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
+    ${locked?'':`<div style="margin:10px 0 4px"><button class="radio ${finesEnabled(c)?'on':''}" data-a="card-fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Adds a Fine button on the score pad. A brass corner mark shows on the box. It never changes the score.</span></span></button></div>`}
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
     <section class="card finish"><h2>Finish the match</h2>
@@ -1447,7 +1462,7 @@ function padSheet(){
     <div class="navrow"><button data-a="prev" aria-label="Previous box">‹ Back</button>
       ${v===9 ? `<button class="${p.spare[s.box]?'on':''}" data-a="spare" aria-pressed="${!!p.spare[s.box]}">Spare ⬡</button>`
         : `<button class="${v>9?'on':''}" disabled>${v>9?'Spare ⬡ (auto)':'Spare ⬡'}</button>`}
-      ${settings.fines?`<button class="${p.fine[s.box]?'on':''}" data-a="fine">Fine ◤</button>`:''}
+      ${finesEnabled(c)?`<button class="${p.fine[s.box]?'on':''}" data-a="fine">Fine ◤</button>`:''}
       <button class="next" data-a="next">Next ›</button></div></div>`;
 }
 function rosterSheet(){
@@ -1572,6 +1587,9 @@ document.addEventListener('click',e=>{
     case 'leave-settings': ui.screen=session?'fixtures':'login'; render(); break;
     case 'rubs': if(!isAdminMode()) break; settings.rubs=+D.v; kvSave('settings',settings); render(); break;
     case 'fines': if(!isAdminMode()) break; settings.fines=!settings.fines; kvSave('settings',settings); render(); break;
+    case 'card-fines': {
+      const c=curCard(); if(!c||c.status==='submitted') break;
+      c.fines=!finesEnabled(c); persist(c.key); render(); break; }
     case 'supabase-flush': if(!isAdminMode()) break; flushSupabaseQueue().then(()=>render()); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
