@@ -1854,17 +1854,18 @@ function cardView(){
   const title=c.quick
     ? (fmt.id==='league' ? `Quick Match · ${fmtDate(c.date)}` : `${fmt.name} cup · ${fmtDate(c.date)}`)
     : `Week ${c.week} · ${fmtDate(c.date)}`;
+  const finesOn=finesEnabled(c);
+  const finesToggle=locked?'':`<button type="button" class="fines-toggle ${finesOn?'on':'off'}" data-a="card-fines" title="When on, the score pad shows a Fine button. Marks do not change the score." aria-pressed="${finesOn?'true':'false'}"><i class="fines-light" aria-hidden="true"></i><span>Mark fines</span></button>`;
   let h=`<div class="wrap wide">
     <div class="cardhead"><button class="back" data-a="back">‹ Fixtures</button>
-      <div><b>${title}</b><br><span class="muted small">${esc(fmt.summary)}</span><br><span class="muted small">${esc(venueOf(home.div,home.num)||'Venue not set')}</span></div>
-      <div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div>`;
+      <div class="cardhead-mid"><b>${title}</b><br><span class="muted small">${esc(fmt.summary)}</span><br><span class="muted small">${esc(venueOf(home.div,home.num)||'Venue not set')}</span></div>
+      <div class="cardhead-right">${finesToggle}<div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
   h+=`<div class="strip" aria-live="polite"><div class="row">
       <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
       <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
-    ${locked?'':`<div style="margin:10px 0 4px"><button class="radio ${finesEnabled(c)?'on':''}" data-a="card-fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Adds a Fine button on the score pad. A brass corner mark shows on the box. It never changes the score.</span></span></button></div>`}
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
     <section class="card finish"><h2>Finish the match</h2>

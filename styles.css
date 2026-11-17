@@ -90,6 +90,18 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 
 /* score card */
 .cardhead{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px}
+.cardhead-mid{min-width:0;flex:1}
+.cardhead-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.fines-toggle{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:6px 12px;border-radius:8px;border:2px solid var(--line);background:var(--card);color:var(--ink);font-weight:700;font-size:14px;white-space:nowrap}
+.fines-toggle .fines-light{width:12px;height:12px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}
+.fines-toggle.on .fines-light{background:#2F6B3F;box-shadow:0 0 0 2px rgba(47,107,63,.25)}
+.fines-toggle.off .fines-light{background:#A6453A;box-shadow:0 0 0 2px rgba(166,69,58,.2)}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .fines-toggle.on .fines-light{background:#7CC08B}
+  :root:not([data-theme="light"]) .fines-toggle.off .fines-light{background:#E48A7E}
+}
+:root[data-theme="dark"] .fines-toggle.on .fines-light{background:#7CC08B}
+:root[data-theme="dark"] .fines-toggle.off .fines-light{background:#E48A7E}
 .session-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px;flex-wrap:wrap}
 .session-top-team{min-width:0;flex:1}
 .session-top-nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
