@@ -1163,10 +1163,13 @@ function matchPdfLines(c){
     ],
     gap:10
   });
+  lines.push({t:'Skittles Scorer', size:8, gap:2});
 
-  // Fine report underneath everything (no asterisks in the score grid)
+  // Fine report on its own page so the shared result page stays clean
+  lines.push({pageBreak:true});
   const fineRows=collectFineReport(c);
   lines.push({t:'FINE REPORT', bold:true, size:11, gap:4});
+  lines.push({t:pdfSafe(hn)+'  v  '+pdfSafe(an)+'  |  '+pdfSafe(fmtDate(c.date)), size:9, gap:4});
   lines.push(rule('-'));
   if(!fineRows.length){
     lines.push({t:'No fines marked', size:9, gap:4});
@@ -1178,8 +1181,7 @@ function matchPdfLines(c){
     const total=fineRows.reduce((n,r)=>n+r.count,0);
     lines.push({t:'Total fine marks: '+total+'  (display only; does not change the score)', size:9, gap:4});
   }
-
-  lines.push({t:'Skittles Scorer', size:8, gap:2});
+  lines.push({t:'Skittles Scorer — page 2 (fines)', size:8, gap:2});
   return lines;
 }
 function jpegSize(u8){
@@ -1226,6 +1228,11 @@ async function buildMatchPdf(c){
   let y=pageH-margin, buf=[];
   const flush=()=>{ pages.push(buf); buf=[]; y=pageH-margin; };
   lines.forEach(line=>{
+    if(line.pageBreak){
+      if(buf.length) flush();
+      y=pageH-margin;
+      return;
+    }
     if(line.sigBoxes){
       const need=sigBlockH+(line.gap==null?10:line.gap);
       if(y-need<margin) flush();
