@@ -275,27 +275,52 @@ body.has-sheet .strip .sc{font-size:26px}
 .league-me-text{font-weight:700;color:var(--felt)}
 a.btn{text-decoration:none}
 
-/* PC / projector mode */
-body.pc-mode .wrap.wide{max-width:1400px}
-body.pc-mode .boards{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
-body.pc-mode .board{display:block !important;padding:6px 6px 10px;margin-bottom:8px;border-width:4px}
+/* PC / projector mode — fit both boards on one screen */
+body.pc-mode .appbar{padding:8px 12px;gap:8px}
+body.pc-mode .appbar h1{font-size:18px}
+body.pc-mode .pill{font-size:12px;padding:4px 10px;min-height:30px}
+body.pc-mode button.pill.tool{min-height:30px}
+body.pc-mode .wrap{padding:6px 10px 16px}
+body.pc-mode .wrap.wide{max-width:100%}
+body.pc-mode .boards{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start}
+body.pc-mode .board{display:block !important;padding:4px 5px 6px;margin-bottom:0;border-width:3px;border-radius:4px}
 body.pc-mode .tabs{display:none}
-body.pc-mode .cardhead{margin-bottom:6px}
-body.pc-mode .strip{padding:6px 10px;margin-bottom:8px}
-body.pc-mode .strip .sc{font-size:28px}
-body.pc-mode .strip .msg{font-size:13px;margin-top:2px}
-body.pc-mode .prow{padding:2px 0 4px}
-body.pc-mode .pname .full{font-size:13px}
-body.pc-mode .pinit{font-size:20px;min-width:38px;min-height:40px;font-weight:700}
-body.pc-mode .box{min-height:44px;font-size:26px;font-weight:700}
-body.pc-mode .ptot{font-size:26px;min-width:46px;font-weight:700}
-body.pc-mode .btitle{padding-bottom:4px;margin-bottom:4px}
-body.pc-mode .chalkhead{font-size:24px}
-body.pc-mode .tname{font-size:16px}
-body.pc-mode .bfoot .lbl{font-size:13px;margin:0 4px}
-body.pc-mode .upsrow span,.pc-mode .colrow span{font-size:20px}
-body.pc-mode .bigtotal{margin-top:6px}
-body.pc-mode .bigtotal b{font-size:34px;padding:2px 14px}
-body.pc-mode.has-sheet{padding-bottom:260px}
+body.pc-mode .cardhead{margin-bottom:4px;gap:8px;align-items:center}
+body.pc-mode .cardhead-mid b{font-size:13px;line-height:1.2}
+body.pc-mode .cardhead-mid .muted{font-size:11px}
+body.pc-mode .fines-toggle{min-height:30px;padding:3px 8px;font-size:12px;gap:6px}
+body.pc-mode .fines-toggle .fines-light{width:10px;height:10px}
+body.pc-mode .saved{font-size:12px}
+body.pc-mode .back{min-height:34px;padding:4px 10px;font-size:13px}
+body.pc-mode .strip{padding:4px 8px;margin-bottom:4px;border-radius:6px;box-shadow:0 1px 0 var(--brass)}
+body.pc-mode .strip .row{gap:6px}
+body.pc-mode .strip .nm{font-size:11px}
+body.pc-mode .strip .sc{font-size:22px}
+body.pc-mode .strip .dash{font-size:16px}
+body.pc-mode .strip .lead-delta{font-size:14px}
+body.pc-mode .strip .msg{display:none}
+body.pc-mode .prow{padding:0 0 1px}
+body.pc-mode .phead{margin-bottom:0}
+body.pc-mode .pname.full-only{min-height:14px;padding:0 2px}
+body.pc-mode .pname .full{font-size:11px;line-height:1.1}
+body.pc-mode .pscore{gap:3px}
+body.pc-mode .pinit{font-size:16px;min-width:28px;min-height:30px;font-weight:700}
+body.pc-mode .box{min-height:32px;font-size:20px;font-weight:700}
+body.pc-mode .boxes.many .box{min-height:28px;font-size:17px}
+body.pc-mode .ptot{font-size:18px;min-width:34px;font-weight:700}
+body.pc-mode .btitle{padding:0 2px 2px;margin-bottom:2px}
+body.pc-mode .chalkhead{font-size:16px}
+body.pc-mode .tname{font-size:12px}
+body.pc-mode .lineup-compact{font-size:11px;min-height:22px;padding:2px 6px;margin-left:4px}
+body.pc-mode .btn.chalk{min-height:32px;padding:4px 8px;margin-bottom:3px;font-size:13px}
+body.pc-mode .bfoot{padding-top:2px}
+body.pc-mode .bfoot .lbl{font-size:10px;margin:0 2px}
+body.pc-mode .upsrow span,body.pc-mode .colrow span{font-size:14px}
+body.pc-mode .upsrow span{margin:1px 2px 0;padding-top:0}
+body.pc-mode .bigtotal{margin-top:2px;gap:8px}
+body.pc-mode .bigtotal small{font-size:12px}
+body.pc-mode .bigtotal b{font-size:24px;padding:1px 10px;border-width:2px}
+body.pc-mode .finish{margin-top:10px}
+body.pc-mode.has-sheet{padding-bottom:200px}
 body.pc-mode .sheet.pc-entry{max-width:720px}
 .pc-hint{margin:2px 0 12px;font-size:15px;font-weight:600;color:var(--ink-soft)}
