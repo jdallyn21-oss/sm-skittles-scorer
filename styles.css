@@ -151,12 +151,12 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .pname .full{font-size:15px;color:var(--chalk-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pname.empty{color:var(--chalk-dim);font-size:15px;text-decoration:underline dashed;text-underline-offset:4px}
 .pscore{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px;align-items:center}
-.pinit{background:none;border:0;color:var(--chalk);font:inherit;font-size:22px;min-width:42px;min-height:48px;padding:0 2px;text-align:center;line-height:1}
-.pinit.empty{color:var(--chalk-dim);text-decoration:underline dashed;text-underline-offset:4px}
-.ptot{font-size:28px;min-width:52px;text-align:right;padding-right:4px}
+.pinit{background:none;border:0;color:var(--chalk);font:700 24px/1 'Patrick Hand','Comic Sans MS',cursive;min-width:44px;min-height:48px;padding:0 2px;text-align:center;letter-spacing:.02em;text-shadow:0.45px 0 0 currentColor,-0.45px 0 0 currentColor}
+.pinit.empty{color:var(--chalk-dim);text-decoration:underline dashed;text-underline-offset:4px;font-weight:600;text-shadow:none}
+.ptot{font-size:30px;font-weight:700;min-width:52px;text-align:right;padding-right:4px;text-shadow:0.35px 0 0 currentColor}
 .boxes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));min-width:0}
-.boxes.many .box{font-size:20px;min-height:44px}
-.box{position:relative;min-height:52px;background:transparent;border:1px solid var(--chalk-line);color:var(--chalk);font:inherit;font-size:28px;padding:0}
+.boxes.many .box{font-size:22px;min-height:44px}
+.box{position:relative;min-height:52px;background:transparent;border:1px solid var(--chalk-line);color:var(--chalk);font:700 30px/1.1 'Patrick Hand','Comic Sans MS',cursive;padding:0;text-shadow:0.45px 0 0 currentColor,-0.45px 0 0 currentColor}
 .box.gs{border-left:3px solid var(--chalk)}
 .box.sel{outline:3px solid var(--brass);outline-offset:-3px;background:rgba(176,141,79,.28);z-index:1}
 .box.spare::after{content:'';position:absolute;inset:2px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cpolygon points='22,5 78,5 98,50 78,95 22,95 2,50' fill='none' stroke='%23F1EDE0' stroke-width='4'/%3E%3C/svg%3E") center/100% 100% no-repeat;pointer-events:none}
@@ -282,9 +282,9 @@ body.pc-mode .strip .sc{font-size:28px}
 body.pc-mode .strip .msg{font-size:13px;margin-top:2px}
 body.pc-mode .prow{padding:2px 0 4px}
 body.pc-mode .pname .full{font-size:13px}
-body.pc-mode .pinit{font-size:18px;min-width:36px;min-height:40px}
-body.pc-mode .box{min-height:42px;font-size:24px}
-body.pc-mode .ptot{font-size:24px;min-width:44px}
+body.pc-mode .pinit{font-size:20px;min-width:38px;min-height:40px;font-weight:700}
+body.pc-mode .box{min-height:44px;font-size:26px;font-weight:700}
+body.pc-mode .ptot{font-size:26px;min-width:46px;font-weight:700}
 body.pc-mode .btitle{padding-bottom:4px;margin-bottom:4px}
 body.pc-mode .chalkhead{font-size:24px}
 body.pc-mode .tname{font-size:16px}
