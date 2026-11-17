@@ -58,6 +58,10 @@ h2{font:700 24px/1.2 'Work Sans',sans-serif;margin:0 0 6px}
 .btn.block{display:flex;width:100%}
 .btn.quiet{background:transparent;color:var(--ink);border-color:var(--line)}
 .btn.chalk{background:transparent;color:var(--chalk);border:2px dashed var(--chalk-line);width:100%;margin-bottom:8px;font-size:17px}
+.btn.chalk.lineup-pre{min-height:44px;padding:8px 12px;margin-bottom:6px;font-size:15px}
+.lineup-compact{background:none;border:1px solid var(--chalk-line);color:var(--chalk-dim);border-radius:6px;font:600 12px/1 'Work Sans',system-ui,sans-serif;padding:4px 8px;min-height:28px;margin-left:8px;vertical-align:middle;white-space:nowrap;opacity:.9}
+.lineup-compact:hover,.lineup-compact:focus-visible{color:var(--chalk);border-color:var(--chalk)}
+.btitle .tname{display:inline-flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:4px;min-width:0}
 .btn[disabled]{opacity:.45;cursor:not-allowed}
 .linkbtn{background:none;border:none;color:var(--ink);text-decoration:underline;font-weight:600;padding:12px 4px;min-height:48px}
 

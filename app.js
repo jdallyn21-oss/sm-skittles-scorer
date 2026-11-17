@@ -1806,15 +1806,23 @@ function boxHTML(c,side,slot,box,locked){
   const notches=fines?`<span class="fine-notches" aria-hidden="true">${Array.from({length:Math.min(fines,6)},()=>'<i></i>').join('')}${fines>6?`<b>×${fines}</b>`:''}</span>`:'';
   return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}${fineNote}">${notches}${v===null?'':v}</button>`;
 }
+function sidePlayStarted(list){
+  return (list||[]).some(p=>p && p.boxes && p.boxes.some(v=>v!==null));
+}
 function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
   const list=c.players[side], meta=sideMeta(c,side), locked=c.status==='submitted', fmt=cardFormat(c);
   const ct=colTotals(c,list), ups=pinsUp(c,list), tot=teamPins(list);
   const last=(SEED.lineups[teamKey(meta.div,meta.num)]||[]);
   const grid=`grid-template-columns:repeat(${fmt.rubs},minmax(0,1fr))`;
-  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">${side==='home'?'Home':'Away'}</span><span class="tname">${esc(sideName(c,side))}</span></div>`;
+  const canReorder=!locked && list.filter(p=>p.name).length>1;
+  const playOn=sidePlayStarted(list) || sidePlayStarted(c.players.home) || sidePlayStarted(c.players.away);
+  const reorderCompact=canReorder && playOn
+    ? `<button type="button" class="lineup-compact" data-a="reorder" data-side="${side}" title="Change the line up">Line up</button>`
+    : '';
+  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">${side==='home'?'Home':'Away'}</span><span class="tname">${esc(sideName(c,side))}${reorderCompact}</span></div>`;
   if(!locked && list.every(p=>!p.name) && last.length) h+=`<button class="btn chalk" data-a="lineup" data-side="${side}">Use last match's line-up</button>`;
-  if(!locked && list.filter(p=>p.name).length>1) h+=`<button class="btn chalk" data-a="reorder" data-side="${side}">Change the line up</button>`;
+  if(canReorder && !playOn) h+=`<button class="btn chalk lineup-pre" data-a="reorder" data-side="${side}">Change the line up</button>`;
   list.forEach((p,slot)=>{
     const fullAbove=p.name
       ? `<button class="pname full-only" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}"><span class="full">${esc(p.name)}</span></button>`
