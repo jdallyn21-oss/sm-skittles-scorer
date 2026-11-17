@@ -475,8 +475,12 @@ function checkCard(c){
       else lines.push({t:nm+': '+fmt.slots+' players, all boxes filled',s:'ok'});
     }
   });
-  if(!c.hasPhoto){ blockers.push('Chalkboard photo needed'); lines.push({t:'Photo of the chalkboard needed',s:'no'}); }
-  else lines.push({t:'Chalkboard photo attached',s:'ok'});
+  if(c.mainSource){
+    lines.push({t:'Main scoring source (chalkboard photo not required)',s:'ok'});
+    if(c.hasPhoto) lines.push({t:'Chalkboard photo attached',s:'ok'});
+  } else if(!c.hasPhoto){
+    blockers.push('Chalkboard photo needed'); lines.push({t:'Photo of the chalkboard needed',s:'no'});
+  } else lines.push({t:'Chalkboard photo attached',s:'ok'});
   if(!c.hasSigHome){ blockers.push('Home captain signature needed'); lines.push({t:'Home captain signature needed',s:'no'}); }
   else lines.push({t:'Home captain signature captured',s:'ok'});
   if(!c.hasSigAway){ blockers.push('Away captain signature needed'); lines.push({t:'Away captain signature needed',s:'no'}); }
@@ -491,6 +495,7 @@ function exportJSON(c){
     homeScore:sc.home,awayScore:sc.away,homePins:sc.pins.home,awayPins:sc.pins.away,
     homeTotal:sc.home,awayTotal:sc.away,
     savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,
+    mainSource:!!c.mainSource,
     homeCaptainSig:c.hasSigHome?'captured':null,awayCaptainSig:c.hasSigAway?'captured':null,
     homePlayers:mk('home'),awayPlayers:mk('away')};
 }
@@ -1887,9 +1892,10 @@ function cardView(){
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
     <section class="card finish"><h2>Finish the match</h2>
-      <p class="muted small" style="margin:0">Take a photo of the chalkboard so the league can check the scores.</p>
+      ${ui.pcMode||c.mainSource?`<button type="button" class="radio ${c.mainSource?'on':''}" data-a="main-source" ${locked?'disabled':''} aria-pressed="${c.mainSource?'true':'false'}"><span class="dot"></span><span><b>This was the main source of scoring</b><br><span class="muted small">Tick when scores were entered here on the PC/projector. Chalkboard photo is then optional.</span></span></button>`:''}
+      <p class="muted small" style="margin:0">${c.mainSource?'Photo is optional because this card is marked as the main scoring source.':'Take a photo of the chalkboard so the league can check the scores.'}</p>
       ${c.hasPhoto&&photoURLs[c.key]?`<img class="photo" src="${photoURLs[c.key]}" alt="Photo of the chalkboard">`:''}
-      <label class="btn block ${c.hasPhoto?'quiet':''}" style="cursor:pointer">${c.hasPhoto?'Retake photo':'Take photo of the chalkboard'}<input type="file" id="photoIn" accept="image/*" capture="environment" hidden ${locked?'disabled':''}></label>
+      <label class="btn block ${c.hasPhoto?'quiet':''}" style="cursor:pointer">${c.hasPhoto?'Retake photo':(c.mainSource?'Add chalkboard photo (optional)':'Take photo of the chalkboard')}<input type="file" id="photoIn" accept="image/*" capture="environment" hidden ${locked?'disabled':''}></label>
       ${sigPadsHtml(c)}
       <ul class="check">${chk.lines.map(l=>`<li class="${l.s==='ok'?'':l.s}">${esc(l.t)}</li>`).join('')}</ul>`;
   if(locked){
@@ -2083,6 +2089,9 @@ document.addEventListener('click',e=>{
     case 'card-fines': {
       const c=curCard(); if(!c||c.status==='submitted') break;
       c.fines=!finesEnabled(c); persist(c.key); render(); break; }
+    case 'main-source': {
+      const c=curCard(); if(!c||c.status==='submitted') break;
+      c.mainSource=!c.mainSource; persist(c.key); render(); break; }
     case 'supabase-flush': if(!isAdminMode()) break; flushSupabaseQueue().then(()=>render()); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
