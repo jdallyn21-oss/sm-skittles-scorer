@@ -1870,9 +1870,16 @@ function cardView(){
       <div class="cardhead-right">${finesToggle}<div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
+  const leadBy=Math.abs(th-ta);
+  const homeLead=th>ta, awayLead=ta>th;
+  const midDash=homeLead
+    ? `<span class="dash-wrap"><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span><span class="dash">–</span></span>`
+    : awayLead
+      ? `<span class="dash-wrap"><span class="dash">–</span><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span></span>`
+      : `<span class="dash">–</span>`;
   h+=`<div class="strip" aria-live="polite"><div class="row">
-      <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
-      <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
+      <div class="side ${homeLead?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div>${midDash}
+      <div class="side r ${awayLead?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
