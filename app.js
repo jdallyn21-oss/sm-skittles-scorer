@@ -1816,11 +1816,17 @@ function boardView(c,side){
   if(!locked && list.every(p=>!p.name) && last.length) h+=`<button class="btn chalk" data-a="lineup" data-side="${side}">Use last match's line-up</button>`;
   if(!locked && list.filter(p=>p.name).length>1) h+=`<button class="btn chalk" data-a="reorder" data-side="${side}">Change the line up</button>`;
   list.forEach((p,slot)=>{
-    const nameBtn=p.name
-      ? `<button class="pname" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${esc(initials(p.name))}<span class="full">${esc(p.name)}</span></button>`
-      : `<button class="pname empty" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${MISSING_PLAYER}</button>`;
-    h+=`<div class="prow"><div class="phead">${nameBtn}<div class="ptot">${p.boxes.some(v=>v!==null)?pinsOf(p):''}</div></div><div class="boxes${fmt.rubs>6?' many':''}" style="${grid}">`+
-       Array.from({length:fmt.rubs},(_,b)=>boxHTML(c,side,slot,b,locked)).join('')+`</div></div>`;
+    const fullAbove=p.name
+      ? `<button class="pname full-only" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}"><span class="full">${esc(p.name)}</span></button>`
+      : `<button class="pname empty full-only" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}">${MISSING_PLAYER}</button>`;
+    const initBtn=p.name
+      ? `<button class="pinit" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}" aria-label="${esc(p.name)}">${esc(initials(p.name))}</button>`
+      : `<button class="pinit empty" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}" aria-label="${MISSING_PLAYER}">?</button>`;
+    h+=`<div class="prow">
+      <div class="phead">${fullAbove}</div>
+      <div class="pscore">${initBtn}<div class="boxes${fmt.rubs>6?' many':''}" style="${grid}">`+
+       Array.from({length:fmt.rubs},(_,b)=>boxHTML(c,side,slot,b,locked)).join('')+
+       `</div><div class="ptot">${p.boxes.some(v=>v!==null)?pinsOf(p):''}</div></div></div>`;
   });
   h+=`<div class="bfoot">`;
   if(formatUsesPairRubs(c)){
@@ -1854,17 +1860,9 @@ function cardView(){
       <div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
-  const leadBy=Math.abs(th-ta);
-  const homeLead=th>ta, awayLead=ta>th;
-  const homeSc=homeLead
-    ? `<span class="sc-line"><span class="sc">${th}</span><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span></span>`
-    : `<span class="sc">${th}</span>`;
-  const awaySc=awayLead
-    ? `<span class="sc-line"><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span><span class="sc">${ta}</span></span>`
-    : `<span class="sc">${ta}</span>`;
   h+=`<div class="strip" aria-live="polite"><div class="row">
-      <div class="side ${homeLead?'lead':''}"><span class="nm">${esc(hn)}</span>${homeSc}</div><span class="dash">–</span>
-      <div class="side r ${awayLead?'lead':''}"><span class="nm">${esc(an)}</span>${awaySc}</div></div>
+      <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
+      <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
     ${locked?'':`<div style="margin:10px 0 4px"><button class="radio ${finesEnabled(c)?'on':''}" data-a="card-fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Adds a Fine button on the score pad. A brass corner mark shows on the box. It never changes the score.</span></span></button></div>`}
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
