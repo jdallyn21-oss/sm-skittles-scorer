@@ -1967,11 +1967,10 @@ function mountReorderDrag(){
     const row=e.target.closest('.orow.draggable');
     if(!row || !board.contains(row)) return;
     if(e.target.closest('[data-a="reorderreplace"],[data-a="reorderdone"]')) return;
-    // Allow taps on the name button to select without starting a drag immediately
+    // Don't capture yet — capture only after drag threshold so taps still click .oname / Replace
     const fromName=!!e.target.closest('.oname');
     const from= +row.dataset.slot;
-    drag={pointerId:e.pointerId, from, startY:e.clientY, lastY:e.clientY, moved:false, fromName, row};
-    try{ row.setPointerCapture(e.pointerId); }catch(err){}
+    drag={pointerId:e.pointerId, from, startY:e.clientY, lastY:e.clientY, moved:false, fromName, row, captured:false};
   };
   const onPointerMove=e=>{
     if(!drag || e.pointerId!==drag.pointerId) return;
@@ -1983,6 +1982,10 @@ function mountReorderDrag(){
       ui.reorderSel=drag.from;
       drag.row.classList.add('dragging');
       rows.forEach(r=>r.style.transition='transform .12s ease');
+      if(!drag.captured){
+        drag.captured=true;
+        try{ drag.row.setPointerCapture(e.pointerId); }catch(err){}
+      }
     }
     e.preventDefault();
     const over=slotFromY(e.clientY);
@@ -2010,7 +2013,7 @@ function mountReorderDrag(){
       render();
       return;
     }
-    // Pure tap on name is handled by click → reordersel; tap elsewhere on row selects here
+    // Tap on name → click handler (reordersel). Tap elsewhere on the row selects here.
     if(!state.fromName){
       ui.reorderSel=(ui.reorderSel===state.from)?null:state.from;
       render();
