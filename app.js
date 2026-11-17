@@ -132,7 +132,26 @@ let leaguePlayedCache = {};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
-             leagueTab:'table', leagueDiv:null, leagueStatsLoading:false, leagueStatsErr:'', leagueStats:null, leagueStatsSource:'' };
+             leagueTab:'table', leagueDiv:null, leagueStatsLoading:false, leagueStatsErr:'', leagueStats:null, leagueStatsSource:'',
+             pcMode:false, pcTheme:'dark' };
+function applyPcChrome(){
+  document.body.classList.toggle('pc-mode', !!ui.pcMode);
+  if(ui.pcMode) document.documentElement.setAttribute('data-theme', ui.pcTheme==='light'?'light':'dark');
+  else document.documentElement.removeAttribute('data-theme');
+}
+function savePcPrefs(){
+  kvSave('pcPrefs', {pcMode:!!ui.pcMode, pcTheme:ui.pcTheme==='light'?'light':'dark'});
+}
+function typeScoreDigit(k){
+  if(!ui.sel) return;
+  let e=ui.fresh?'':ui.entry; ui.fresh=false; e=e+k;
+  if(e.length>2||+e>MAXBOX) e=k;
+  ui.entry=e; setVal(+e); scrollToSel();
+}
+function typeScoreBackspace(){
+  if(!ui.sel) return;
+  ui.fresh=false; ui.entry=ui.entry.slice(0,-1); setVal(ui.entry===''?null:+ui.entry); scrollToSel();
+}
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -270,7 +289,51 @@ function quickMatchesFor(d,n){
 /* ---------- card model ---------- */
 function blankSide(fmt){
   fmt=fmt||FORMATS.league;
-  return Array.from({length:fmt.slots},()=>({name:'',boxes:Array(fmt.rubs).fill(null),spare:Array(fmt.rubs).fill(false),fine:Array(fmt.rubs).fill(false)}));
+  return Array.from({length:fmt.slots},()=>({name:'',boxes:Array(fmt.rubs).fill(null),spare:Array(fmt.rubs).fill(false),fine:Array(fmt.rubs).fill(0)}));
+}
+/** Fine marks per box (notch count). Booleans from older cards become 0/1. Not capped at 2. */
+const FINE_CYCLE_MAX = 9;
+function fineCount(p, box){
+  if(!p || !p.fine) return 0;
+  const v=p.fine[box];
+  if(v===true) return 1;
+  if(v===false || v==null || v==='') return 0;
+  const n=Math.floor(Number(v));
+  return Number.isFinite(n) && n>0 ? n : 0;
+}
+function setFineCount(p, box, n){
+  if(!p.fine) p.fine=[];
+  const v=Math.max(0, Math.floor(Number(n)||0));
+  p.fine[box]=v;
+}
+function normalizeCardFines(c){
+  if(!c || !c.players) return c;
+  const rubs=(cardFormat(c).rubs)||6;
+  ['home','away'].forEach(side=>{
+    (c.players[side]||[]).forEach(p=>{
+      if(!p.fine || !Array.isArray(p.fine)) p.fine=Array(rubs).fill(0);
+      else {
+        for(let i=0;i<p.fine.length;i++) p.fine[i]=fineCount(p,i);
+        while(p.fine.length<rubs) p.fine.push(0);
+      }
+    });
+  });
+  return c;
+}
+function collectFineReport(c){
+  const rows=[];
+  ['home','away'].forEach(side=>{
+    const team=sideName(c,side);
+    (c.players[side]||[]).forEach(p=>{
+      if(!p || !p.name) return;
+      const rubs=(p.fine&&p.fine.length)||cardFormat(c).rubs;
+      for(let box=0; box<rubs; box++){
+        const n=fineCount(p,box);
+        if(n>0) rows.push({side, team, player:p.name, box, rub:box+1, count:n, label:rubLabel(c,box)});
+      }
+    });
+  });
+  return rows;
 }
 function ensureCard(f){
   if(!cards[f.key]){
@@ -1023,12 +1086,11 @@ function matchPdfLines(c){
   const colW=4, totW=5;
   const tableW=nameW + rubs*colW + totW;
   const rule=(ch)=>({t:ch.repeat(tableW), mono:true, size:8, gap:2});
-  const rowPlayer=(label, boxes, tot, fines)=>{
+  const rowPlayer=(label, boxes, tot)=>{
     let t=pdfPad(label,nameW);
     for(let i=0;i<rubs;i++){
       const v=boxes[i];
-      let cell=v===null||v===undefined?'-':String(v);
-      if(fines && fines[i] && cell!=='-') cell=cell+'*'; // * = fine (display only; score unchanged)
+      const cell=v===null||v===undefined?'-':String(v);
       t+=pdfPad(cell, colW, 'r');
     }
     t+=pdfPad(tot===null||tot===undefined?'-':String(tot), totW, 'r');
@@ -1071,13 +1133,10 @@ function matchPdfLines(c){
     lines.push(rule('-'));
     lines.push(hdr);
     lines.push(rule('-'));
-    let anyFine=false;
     list.forEach(p=>{
-      if(p.fine && p.fine.some(Boolean)) anyFine=true;
-      lines.push(rowPlayer(playerLabel(p), p.boxes, p.name?pinsOf(p):null, p.fine));
+      lines.push(rowPlayer(playerLabel(p), p.boxes, p.name?pinsOf(p):null));
     });
     lines.push(rule('-'));
-    if(anyFine) lines.push({t:'* = fine (display only; does not change the score)', size:8, gap:2});
     if(formatUsesPairRubs(c)){
       // Show paired rub scores under the grid (3 values for 6 rubs)
       let rubLine=pdfPad('Rub score', nameW);
@@ -1099,6 +1158,21 @@ function matchPdfLines(c){
     ],
     gap:10
   });
+
+  // Fine report underneath everything (no asterisks in the score grid)
+  const fineRows=collectFineReport(c);
+  lines.push({t:'FINE REPORT', bold:true, size:11, gap:4});
+  lines.push(rule('-'));
+  if(!fineRows.length){
+    lines.push({t:'No fines marked', size:9, gap:4});
+  } else {
+    fineRows.forEach(r=>{
+      const marks=r.count===1?'1 fine mark':(r.count+' fine marks');
+      lines.push({t:pdfSafe(r.team)+'  |  '+pdfSafe(r.player)+'  |  '+pdfSafe(r.label)+'  |  '+marks, size:9, gap:2});
+    });
+    const total=fineRows.reduce((n,r)=>n+r.count,0);
+    lines.push({t:'Total fine marks: '+total+'  (display only; does not change the score)', size:9, gap:4});
+  }
 
   lines.push({t:'Skittles Scorer', size:8, gap:2});
   return lines;
@@ -1466,7 +1540,12 @@ function mountSignaturePads(){
 /* ---------- views ---------- */
 function appBar(){
   const on=navigator.onLine!==false;
-  return `<header class="appbar"><h1>Skittles Scorer</h1><span class="pill ${on?'':'off'}">${on?'Online':'No signal · saving on this phone'}</span></header>`;
+  const tools=`<div class="appbar-tools">
+      ${ui.pcMode?`<button type="button" class="pill tool" data-a="pc-theme" title="Toggle light or dark for projector">${ui.pcTheme==='light'?'Light boxes':'Dark boxes'}</button>`:''}
+      <button type="button" class="pill tool ${ui.pcMode?'on':''}" data-a="pc-mode" title="Laptop and projector layout">${ui.pcMode?'PC mode on':'PC / projector'}</button>
+      <span class="pill ${on?'':'off'}">${on?'Online':'No signal · saving on this phone'}</span>
+    </div>`;
+  return `<header class="appbar"><h1>Skittles Scorer</h1>${tools}</header>`;
 }
 function isStandalone(){ return (window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone===true; }
 function isIOS(){ return /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1); }
@@ -1721,9 +1800,11 @@ function boxHTML(c,side,slot,box,locked){
   const p=c.players[side][slot], v=p.boxes[box];
   const sel=ui.sel&&ui.sel.side===side&&ui.sel.slot===slot&&ui.sel.box===box;
   const pair=formatUsesPairRubs(c);
-  const cls=['box', pair&&box%2===0&&box>0?'gs':'', sel?'sel':'', isSpare(p,box)?'spare':'', p.fine[box]?'fine':''].join(' ');
-  const fineNote=p.fine[box]?', fine':'';
-  return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}${fineNote}">${v===null?'':v}</button>`;
+  const fines=fineCount(p,box);
+  const cls=['box', pair&&box%2===0&&box>0?'gs':'', sel?'sel':'', isSpare(p,box)?'spare':'', fines?'fine':'', fines>1?'fine-multi':''].join(' ');
+  const fineNote=fines?(fines===1?', fine':', '+fines+' fines'):'';
+  const notches=fines?`<span class="fine-notches" aria-hidden="true">${Array.from({length:Math.min(fines,6)},()=>'<i></i>').join('')}${fines>6?`<b>×${fines}</b>`:''}</span>`:'';
+  return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}${fineNote}">${notches}${v===null?'':v}</button>`;
 }
 function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
@@ -1773,9 +1854,17 @@ function cardView(){
       <div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
+  const leadBy=Math.abs(th-ta);
+  const homeLead=th>ta, awayLead=ta>th;
+  const homeSc=homeLead
+    ? `<span class="sc-line"><span class="sc">${th}</span><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span></span>`
+    : `<span class="sc">${th}</span>`;
+  const awaySc=awayLead
+    ? `<span class="sc-line"><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span><span class="sc">${ta}</span></span>`
+    : `<span class="sc">${ta}</span>`;
   h+=`<div class="strip" aria-live="polite"><div class="row">
-      <div class="side ${th>ta?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div><span class="dash">–</span>
-      <div class="side r ${ta>th?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
+      <div class="side ${homeLead?'lead':''}"><span class="nm">${esc(hn)}</span>${homeSc}</div><span class="dash">–</span>
+      <div class="side r ${awayLead?'lead':''}"><span class="nm">${esc(an)}</span>${awaySc}</div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
     ${locked?'':`<div style="margin:10px 0 4px"><button class="radio ${finesEnabled(c)?'on':''}" data-a="card-fines"><span class="dot"></span><span><b>Mark fines</b><br><span class="muted small">Adds a Fine button on the score pad. A brass corner mark shows on the box. It never changes the score.</span></span></button></div>`}
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
@@ -1830,16 +1919,24 @@ function rubLabel(c,box){
 }
 function padSheet(){
   const s=ui.sel, c=curCard(), p=c.players[s.side][s.slot], v=p.boxes[s.box];
+  const nav=`<div class="navrow"><button data-a="prev" aria-label="Previous box">‹ Back</button>
+      ${v===9 ? `<button class="${p.spare[s.box]?'on':''}" data-a="spare" aria-pressed="${!!p.spare[s.box]}">Spare ⬡</button>`
+        : `<button class="${v>9?'on':''}" disabled>${v>9?'Spare ⬡ (auto)':'Spare ⬡'}</button>`}
+      ${finesEnabled(c)?`<button class="${fineCount(p,s.box)?'on':''}" data-a="fine">${fineCount(p,s.box)?`Fine ◤×${fineCount(p,s.box)}`:'Fine ◤'}</button>`:''}
+      <button class="next" data-a="next">Next ›</button></div>`;
+  if(ui.pcMode){
+    return `<div class="sheet pc-entry" role="dialog" aria-label="Enter score">
+      <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(sideName(c,s.side))} · ${rubLabel(c,s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
+      <p class="pc-hint">Type the score on the keyboard · Backspace clears · Enter goes Next</p>
+      ${nav}
+      <button class="btn quiet block" data-a="closepad" style="margin-top:10px">Done</button></div>`;
+  }
   const keys=['9','8','7','6','5','4','3','2','1'].map(k=>`<button data-a="k" data-k="${k}">${k}</button>`).join('')+
     `<button data-a="kback" aria-label="Delete">⌫</button><button data-a="k" data-k="0">0</button><button data-a="closepad" style="font-size:20px">Done</button>`;
   return `<div class="sheet" role="dialog" aria-label="Enter score">
     <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(sideName(c,s.side))} · ${rubLabel(c,s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
     <div class="keys">${keys}</div>
-    <div class="navrow"><button data-a="prev" aria-label="Previous box">‹ Back</button>
-      ${v===9 ? `<button class="${p.spare[s.box]?'on':''}" data-a="spare" aria-pressed="${!!p.spare[s.box]}">Spare ⬡</button>`
-        : `<button class="${v>9?'on':''}" disabled>${v>9?'Spare ⬡ (auto)':'Spare ⬡'}</button>`}
-      ${finesEnabled(c)?`<button class="${p.fine[s.box]?'on':''}" data-a="fine">Fine ◤</button>`:''}
-      <button class="next" data-a="next">Next ›</button></div></div>`;
+    ${nav}</div>`;
 }
 function rosterSheet(){
   const {side,slot}=ui.sheet, c=curCard(), meta=sideMeta(c,side);
@@ -1864,6 +1961,7 @@ function rosterSheet(){
 }
 
 function render(){
+  applyPcChrome();
   document.body.classList.toggle('has-sheet', !!(ui.sel||ui.sheet||ui.moveSheet));
   let h=appBar();
   if(ui.msg && ui.screen!=='card') h+=`<div class="wrap" style="padding-bottom:0"><div class="banner bad" role="alert">${esc(ui.msg)}</div></div>`;
@@ -2011,16 +2109,25 @@ document.addEventListener('click',e=>{
       const s={side:D.side,slot:+D.slot,box:+D.box}, p=c.players[s.side][s.slot];
       if(!p.name){ ui.sel=null; ui.sheet={side:s.side,slot:s.slot}; ui.resume={slot:s.slot,box:s.box}; render(); break; }
       ui.sel=s; ui.entry=p.boxes[s.box]===null?'':String(p.boxes[s.box]); ui.fresh=true; render(); scrollToSel(); break; }
-    case 'k': {
-      let e=ui.fresh?'':ui.entry; ui.fresh=false; e=e+D.k;
-      if(e.length>2||+e>MAXBOX) e=D.k;
-      ui.entry=e; setVal(+e); scrollToSel(); break; }
-    case 'kback': { ui.fresh=false; ui.entry=ui.entry.slice(0,-1); setVal(ui.entry===''?null:+ui.entry); scrollToSel(); break; }
+    case 'pc-mode': {
+      ui.pcMode=!ui.pcMode;
+      if(ui.pcMode && ui.pcTheme!=='light' && ui.pcTheme!=='dark') ui.pcTheme='dark';
+      savePcPrefs(); applyPcChrome(); render(); break; }
+    case 'pc-theme': {
+      if(!ui.pcMode) break;
+      ui.pcTheme=ui.pcTheme==='light'?'dark':'light';
+      savePcPrefs(); applyPcChrome(); render(); break; }
+    case 'k': { typeScoreDigit(D.k); break; }
+    case 'kback': { typeScoreBackspace(); break; }
     case 'next': move(1); break;
     case 'prev': move(-1); break;
     case 'closepad': ui.sel=null; render(); break;
     case 'spare': { const c=curCard(), s=ui.sel, p=c.players[s.side][s.slot]; if(p.boxes[s.box]!==9) break; p.spare[s.box]=!p.spare[s.box]; persist(c.key); render(); scrollToSel(); break; }
-    case 'fine':  { const c=curCard(), s=ui.sel, p=c.players[s.side][s.slot]; p.fine[s.box]=!p.fine[s.box]; persist(c.key); render(); scrollToSel(); break; }
+    case 'fine':  {
+      const c=curCard(), s=ui.sel, p=c.players[s.side][s.slot];
+      const n=fineCount(p,s.box);
+      setFineCount(p, s.box, n>=FINE_CYCLE_MAX ? 0 : n+1);
+      persist(c.key); render(); scrollToSel(); break; }
     case 'name': ui.sel=null; ui.sheet={side:D.side,slot:+D.slot}; ui.resume=null; ui.newName=''; ui.dupe=null; render(); break;
     case 'reorder': ui.reorder=D.side; ui.side=D.side; ui.sel=null; ui.sheet=null; ui.resume=null; render(); break;
     case 'reorderdone': ui.reorder=null; render(); break;
@@ -2074,6 +2181,16 @@ document.addEventListener('change',e=>{
   }
 });
 document.addEventListener('input',e=>{ if(e.target.id==='newName'){ ui.newName=e.target.value; if(ui.dupe){ ui.dupe=null; } } });
+document.addEventListener('keydown',e=>{
+  if(!ui.pcMode || ui.screen!=='card' || !ui.sel) return;
+  const t=e.target;
+  if(t && (t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||t.isContentEditable)) return;
+  if(e.key>='0' && e.key<='9'){ e.preventDefault(); typeScoreDigit(e.key); return; }
+  if(e.key==='Backspace'){ e.preventDefault(); typeScoreBackspace(); return; }
+  if(e.key==='Enter' || e.key==='ArrowRight'){ e.preventDefault(); move(1); return; }
+  if(e.key==='ArrowLeft'){ e.preventDefault(); move(-1); return; }
+  if(e.key==='Escape'){ e.preventDefault(); ui.sel=null; render(); }
+});
 window.addEventListener('online',()=>{
   Promise.all([flushLeagueSyncQueue(), flushSupabaseQueue()]).finally(render);
 });
@@ -2106,9 +2223,14 @@ async function init(){
       localStorage.removeItem('skittles.supabaseAnonKey');
     }catch(e){}
     session=kv.session||null; extra=kv.extraRoster||{};
+    if(kv.pcPrefs && typeof kv.pcPrefs==='object'){
+      ui.pcMode=!!kv.pcPrefs.pcMode;
+      ui.pcTheme=kv.pcPrefs.pcTheme==='light'?'light':'dark';
+    }
     // Older sessions lack pin — Supabase sync needs a fresh login
     if(session && !session.teamKey && session.div!=null) session.teamKey=teamKey(session.div,session.num);
     cards=await idbAll('cards');
+    Object.keys(cards).forEach(k=>{ normalizeCardFines(cards[k]); });
     const photos=await idbAll('photos');
     Object.keys(photos).forEach(k=>{ photoURLs[k]=URL.createObjectURL(photos[k]); });
     const sigs=await idbAll('sigs');
