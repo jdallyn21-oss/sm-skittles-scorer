@@ -1883,6 +1883,7 @@ function cardView(){
       <div class="cardhead-mid"><b>${esc(titleWithVenue)}</b><br><span class="muted small">${esc(fmt.summary)}</span></div>
       <div class="cardhead-right">${finesToggle}<div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
+  if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
   const leadBy=Math.abs(th-ta);
   const homeLead=th>ta, awayLead=ta>th;
@@ -1950,6 +1951,7 @@ function mountReorderDrag(){
   if(!rows.length) return;
   let drag=null;
   const clearDragClass=()=>{
+    board.classList.remove('is-dragging');
     rows.forEach(r=>{ r.classList.remove('dragging','drag-over'); r.style.transform=''; r.style.transition=''; });
   };
   const slotFromY=(clientY)=>{
@@ -1964,21 +1966,20 @@ function mountReorderDrag(){
   };
   const onPointerDown=e=>{
     if(e.button!=null && e.button!==0) return;
+    if(e.target.closest('[data-a="reorderreplace"],[data-a="reorderdone"]')) return;
     const row=e.target.closest('.orow.draggable');
     if(!row || !board.contains(row)) return;
-    if(e.target.closest('[data-a="reorderreplace"],[data-a="reorderdone"]')) return;
-    // Don't capture yet — capture only after drag threshold so taps still click .oname / Replace
-    const fromName=!!e.target.closest('.oname');
-    const from= +row.dataset.slot;
-    drag={pointerId:e.pointerId, from, startY:e.clientY, lastY:e.clientY, moved:false, fromName, row, captured:false};
+    const from=+row.dataset.slot;
+    drag={pointerId:e.pointerId, from, startY:e.clientY, lastY:e.clientY, moved:false, row, captured:false};
   };
   const onPointerMove=e=>{
     if(!drag || e.pointerId!==drag.pointerId) return;
     const dy=e.clientY-drag.startY;
     drag.lastY=e.clientY;
-    if(!drag.moved && Math.abs(dy)<10) return;
+    if(!drag.moved && Math.abs(dy)<8) return;
     if(!drag.moved){
       drag.moved=true;
+      board.classList.add('is-dragging');
       ui.reorderSel=drag.from;
       drag.row.classList.add('dragging');
       rows.forEach(r=>r.style.transition='transform .12s ease');
@@ -1998,11 +1999,11 @@ function mountReorderDrag(){
   const finish=e=>{
     if(!drag || (e && e.pointerId!==drag.pointerId)) return;
     const state=drag; drag=null;
-    const moved=state.moved;
     clearDragClass();
-    if(moved){
-      suppressReorderClick=true;
-      setTimeout(()=>{ suppressReorderClick=false; }, 0);
+    // Always own the gesture end so a following click cannot toggle selection twice
+    suppressReorderClick=true;
+    setTimeout(()=>{ suppressReorderClick=false; }, 50);
+    if(state.moved){
       const to=slotFromY(state.lastY);
       if(to!=null && to!==state.from){
         movePlayer(side, state.from, to);
@@ -2013,16 +2014,15 @@ function mountReorderDrag(){
       render();
       return;
     }
-    // Tap on name → click handler (reordersel). Tap elsewhere on the row selects here.
-    if(!state.fromName){
-      ui.reorderSel=(ui.reorderSel===state.from)?null:state.from;
-      render();
-    }
+    // Tap anywhere on the row (including the name) selects / deselects
+    ui.reorderSel=(ui.reorderSel===state.from)?null:state.from;
+    render();
   };
   board.addEventListener('pointerdown', onPointerDown);
   board.addEventListener('pointermove', onPointerMove, {passive:false});
   board.addEventListener('pointerup', finish);
   board.addEventListener('pointercancel', finish);
+  board.addEventListener('lostpointercapture', finish);
 }
 function moveSheet(){
   const {side,slot}=ui.moveSheet, list=curCard().players[side], p=list[slot];
@@ -2404,7 +2404,7 @@ function registerWorker(){
   const hadController=!!navigator.serviceWorker.controller; let reloading=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{ if(!hadController||reloading) return; reloading=true; location.reload(); });
   navigator.serviceWorker.register('./sw.js').then(reg=>{
-    const flag=()=>{ if(reg.waiting && navigator.serviceWorker.controller){ ui.updateReady=reg; if(ui.screen==='fixtures') render(); } };
+    const flag=()=>{ if(reg.waiting && navigator.serviceWorker.controller){ ui.updateReady=reg; render(); } };
     flag();
     reg.addEventListener('updatefound',()=>{ const w=reg.installing; if(w) w.addEventListener('statechange',()=>{ if(w.state==='installed') flag(); }); });
     const check=()=>reg.update().catch(()=>{});

@@ -248,6 +248,8 @@ body.has-sheet .strip .sc{font-size:26px}
 .oreplace-bar{display:flex;align-items:center;gap:10px;justify-content:space-between;margin:0 0 10px;padding:10px 12px;border:2px solid var(--brass);border-radius:10px;background:rgba(176,141,79,.12)}
 .oreplace-who{font:600 18px/1.2 'Work Sans',system-ui,sans-serif;color:var(--chalk);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .oreplace-btn{flex:none;min-height:44px;padding:8px 14px;margin:0}
+.reorder-board{touch-action:pan-y}
+.reorder-board.is-dragging{touch-action:none;overflow:hidden}
 .orow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--chalk-line);touch-action:none;user-select:none;-webkit-user-select:none;border-radius:8px;transition:background .12s ease,box-shadow .12s ease}
 .orow.draggable{cursor:grab}
 .orow.sel{background:rgba(176,141,79,.16);box-shadow:inset 0 0 0 2px var(--brass)}
