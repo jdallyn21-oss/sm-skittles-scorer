@@ -130,7 +130,7 @@ let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false,
 /** Live/bundled league scorelines keyed by fixture card key `div-week-mi` → {h,a,source}. */
 let leaguePlayedCache = {};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
-             sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, moveSheet:null,
+             sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, reorderSel:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
              leagueTab:'table', leagueDiv:null, leagueStatsLoading:false, leagueStatsErr:'', leagueStats:null, leagueStatsSource:'',
              pcMode:false, pcTheme:'dark' };
@@ -349,7 +349,7 @@ function ensureCard(f){
 }
 function openCard(key){
   const c=cards[key]; if(!c) return;
-  ui.cardKey=key; ui.side=startSide(c); ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null;
+  ui.cardKey=key; ui.side=startSide(c); ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null;
   ui.screen='card'; render(); window.scrollTo(0,0);
 }
 function deleteQuickMatch(key){
@@ -361,7 +361,7 @@ function deleteQuickMatch(key){
     idbDel('cards',key), idbDel('photos',key),
     idbDel('sigs',sigStoreKey(key,'home')), idbDel('sigs',sigStoreKey(key,'away'))
   ]).catch(saveFailed);
-  if(ui.cardKey===key){ ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null; ui.screen='fixtures'; }
+  if(ui.cardKey===key){ ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null; ui.screen='fixtures'; }
   render();
 }
 function startQuickMatch(){
@@ -1920,16 +1920,106 @@ function cardView(){
 
 function reorderView(c,side){
   const list=c.players[side];
-  let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">Line up</span><span class="tname">${esc(sideName(c,side))}</span></div>
-    <p class="ohint">Tap ▲ or ▼ to move a player one place. Tap a name to move them straight to any position. Scores move with the player.</p>`;
+  const sel=ui.reorderSel;
+  const selPlayer=(sel!=null && list[sel] && list[sel].name)?list[sel]:null;
+  let h=`<section class="board reorder-board ${ui.side===side?'on':''}" data-reorder-side="${side}"><div class="btitle"><span class="chalkhead">Line up</span><span class="tname">${esc(sideName(c,side))}</span></div>
+    <p class="ohint">Tap a player to select them, then drag or swipe to move. Scores move with the player. Use Replace to change who plays.</p>`;
+  if(selPlayer){
+    h+=`<div class="oreplace-bar" role="status">
+      <span class="oreplace-who">${esc(selPlayer.name)}</span>
+      <button type="button" class="btn brass oreplace-btn" data-a="reorderreplace" data-side="${side}" data-slot="${sel}">Replace</button>
+    </div>`;
+  }
   list.forEach((p,i)=>{
-    h+=`<div class="orow"><span class="onum">${i+1}</span>`+(p.name
-      ? `<button class="oname" data-a="movepick" data-side="${side}" data-slot="${i}">${esc(initials(p.name))}<span class="full">${esc(p.name)}</span></button>
-         <button class="arr" aria-label="Move ${esc(p.name)} up" data-a="up" data-side="${side}" data-slot="${i}" ${i===0?'disabled':''}>▲</button>
-         <button class="arr" aria-label="Move ${esc(p.name)} down" data-a="down" data-side="${side}" data-slot="${i}" ${i===list.length-1?'disabled':''}>▼</button>`
+    const on=sel===i;
+    h+=`<div class="orow${on?' sel':''}${p.name?' draggable':''}" data-side="${side}" data-slot="${i}" ${p.name?'draggable="false"':''}>
+      <span class="onum">${i+1}</span>`+(p.name
+      ? `<button type="button" class="oname" data-a="reordersel" data-side="${side}" data-slot="${i}" aria-pressed="${on?'true':'false'}">${esc(initials(p.name))}<span class="full">${esc(p.name)}</span></button>
+         <span class="odrag" aria-hidden="true">⠿</span>`
       : `<span class="oname empty">${MISSING_PLAYER}</span>`)+`</div>`;
   });
   return h+`<button class="btn brass block" data-a="reorderdone" style="margin-top:14px">Done</button></section>`;
+}
+let suppressReorderClick=false;
+function mountReorderDrag(){
+  const board=$app.querySelector('.reorder-board');
+  if(!board || ui.sheet || ui.moveSheet) return;
+  const side=board.getAttribute('data-reorder-side');
+  if(!side || ui.reorder!==side) return;
+  const rows=[...board.querySelectorAll('.orow.draggable')];
+  if(!rows.length) return;
+  let drag=null;
+  const clearDragClass=()=>{
+    rows.forEach(r=>{ r.classList.remove('dragging','drag-over'); r.style.transform=''; r.style.transition=''; });
+  };
+  const slotFromY=(clientY)=>{
+    let best=null, bestDist=Infinity;
+    rows.forEach(r=>{
+      const rect=r.getBoundingClientRect();
+      const mid=rect.top+rect.height/2;
+      const d=Math.abs(clientY-mid);
+      if(d<bestDist){ bestDist=d; best=+r.dataset.slot; }
+    });
+    return best;
+  };
+  const onPointerDown=e=>{
+    if(e.button!=null && e.button!==0) return;
+    const row=e.target.closest('.orow.draggable');
+    if(!row || !board.contains(row)) return;
+    if(e.target.closest('[data-a="reorderreplace"],[data-a="reorderdone"]')) return;
+    // Allow taps on the name button to select without starting a drag immediately
+    const fromName=!!e.target.closest('.oname');
+    const from= +row.dataset.slot;
+    drag={pointerId:e.pointerId, from, startY:e.clientY, lastY:e.clientY, moved:false, fromName, row};
+    try{ row.setPointerCapture(e.pointerId); }catch(err){}
+  };
+  const onPointerMove=e=>{
+    if(!drag || e.pointerId!==drag.pointerId) return;
+    const dy=e.clientY-drag.startY;
+    drag.lastY=e.clientY;
+    if(!drag.moved && Math.abs(dy)<10) return;
+    if(!drag.moved){
+      drag.moved=true;
+      ui.reorderSel=drag.from;
+      drag.row.classList.add('dragging');
+      rows.forEach(r=>r.style.transition='transform .12s ease');
+    }
+    e.preventDefault();
+    const over=slotFromY(e.clientY);
+    rows.forEach(r=>{
+      r.classList.toggle('drag-over', over!=null && +r.dataset.slot===over && over!==drag.from);
+      if(+r.dataset.slot===drag.from) r.style.transform=`translateY(${dy}px)`;
+      else r.style.transform='';
+    });
+  };
+  const finish=e=>{
+    if(!drag || (e && e.pointerId!==drag.pointerId)) return;
+    const state=drag; drag=null;
+    const moved=state.moved;
+    clearDragClass();
+    if(moved){
+      suppressReorderClick=true;
+      setTimeout(()=>{ suppressReorderClick=false; }, 0);
+      const to=slotFromY(state.lastY);
+      if(to!=null && to!==state.from){
+        movePlayer(side, state.from, to);
+        ui.reorderSel=to;
+      } else {
+        ui.reorderSel=state.from;
+      }
+      render();
+      return;
+    }
+    // Pure tap on name is handled by click → reordersel; tap elsewhere on row selects here
+    if(!state.fromName){
+      ui.reorderSel=(ui.reorderSel===state.from)?null:state.from;
+      render();
+    }
+  };
+  board.addEventListener('pointerdown', onPointerDown);
+  board.addEventListener('pointermove', onPointerMove, {passive:false});
+  board.addEventListener('pointerup', finish);
+  board.addEventListener('pointercancel', finish);
 }
 function moveSheet(){
   const {side,slot}=ui.moveSheet, list=curCard().players[side], p=list[slot];
@@ -2004,7 +2094,7 @@ function render(){
   else if(ui.screen==='card') h+=cardView()+(ui.sel?padSheet():'')+(ui.sheet?rosterSheet():'')+(ui.moveSheet?moveSheet():'');
   $app.innerHTML=h;
   if(ui.sel){ scrollToSel(); requestAnimationFrame(scrollToSel); }
-  if(ui.screen==='card') requestAnimationFrame(mountSignaturePads);
+  if(ui.screen==='card') requestAnimationFrame(()=>{ mountSignaturePads(); mountReorderDrag(); });
 }
 // Sit the selected player's row (name and boxes) directly above the keypad, clear of the score bar
 function scrollToSel(){
@@ -2086,6 +2176,7 @@ function compressBlob(file){
 document.addEventListener('click',e=>{
   const el=e.target.closest('[data-a]'); if(!el||el.disabled) return;
   const a=el.dataset.a, D=el.dataset;
+  if(suppressReorderClick && (a==='reordersel'||a==='reorderreplace')){ e.preventDefault(); return; }
   switch(a){
     case 'pin': if(ui.pin.length<4){ ui.pin+=D.k; ui.pinMsg=''; render(); if(ui.pin.length===4) setTimeout(tryLogin,150); } break;
     case 'pinback': ui.pin=ui.pin.slice(0,-1); render(); break;
@@ -2135,7 +2226,7 @@ document.addEventListener('click',e=>{
       const f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);
       if(!f||f.bye) break;
       ensureCard(f); openCard(D.key); break; }
-    case 'back': ui.sel=null; ui.sheet=null; ui.reorder=null; ui.moveSheet=null; ui.screen='fixtures'; render(); break;
+    case 'back': ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null; ui.screen='fixtures'; render(); break;
     case 'side': ui.side=D.side; render(); break;
     case 'box': {
       const c=curCard(); if(c.status==='submitted') break;
@@ -2162,8 +2253,16 @@ document.addEventListener('click',e=>{
       setFineCount(p, s.box, n>=FINE_CYCLE_MAX ? 0 : n+1);
       persist(c.key); render(); scrollToSel(); break; }
     case 'name': ui.sel=null; ui.sheet={side:D.side,slot:+D.slot}; ui.resume=null; ui.newName=''; ui.dupe=null; render(); break;
-    case 'reorder': ui.reorder=D.side; ui.side=D.side; ui.sel=null; ui.sheet=null; ui.resume=null; render(); break;
-    case 'reorderdone': ui.reorder=null; render(); break;
+    case 'reorder': ui.reorder=D.side; ui.side=D.side; ui.reorderSel=null; ui.sel=null; ui.sheet=null; ui.resume=null; render(); break;
+    case 'reorderdone': ui.reorder=null; ui.reorderSel=null; render(); break;
+    case 'reordersel': {
+      const slot=+D.slot;
+      ui.reorderSel=(ui.reorderSel===slot)?null:slot;
+      render(); break; }
+    case 'reorderreplace': {
+      ui.reorderSel=+D.slot;
+      ui.sel=null; ui.sheet={side:D.side,slot:+D.slot}; ui.resume=null; ui.newName=''; ui.dupe=null; ui.sheetMsg='';
+      render(); break; }
     case 'up': movePlayer(D.side,+D.slot,+D.slot-1); render(); break;
     case 'down': movePlayer(D.side,+D.slot,+D.slot+1); render(); break;
     case 'movepick': ui.moveSheet={side:D.side,slot:+D.slot}; render(); break;

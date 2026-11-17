@@ -245,13 +245,20 @@ body.has-sheet .strip .sc{font-size:26px}
 /* reordering the team */
 .btn.brass{background:var(--brass);border-color:var(--brass);color:#17130C}
 .ohint{font-family:'Work Sans',system-ui,sans-serif;font-size:15px;color:var(--chalk-dim);margin:0 4px 10px}
-.orow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--chalk-line)}
+.oreplace-bar{display:flex;align-items:center;gap:10px;justify-content:space-between;margin:0 0 10px;padding:10px 12px;border:2px solid var(--brass);border-radius:10px;background:rgba(176,141,79,.12)}
+.oreplace-who{font:600 18px/1.2 'Work Sans',system-ui,sans-serif;color:var(--chalk);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oreplace-btn{flex:none;min-height:44px;padding:8px 14px;margin:0}
+.orow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--chalk-line);touch-action:none;user-select:none;-webkit-user-select:none;border-radius:8px;transition:background .12s ease,box-shadow .12s ease}
+.orow.draggable{cursor:grab}
+.orow.sel{background:rgba(176,141,79,.16);box-shadow:inset 0 0 0 2px var(--brass)}
+.orow.dragging{opacity:.92;background:rgba(176,141,79,.22);box-shadow:0 8px 18px rgba(0,0,0,.28);z-index:2;position:relative;cursor:grabbing}
+.orow.drag-over{box-shadow:inset 0 3px 0 0 var(--brass)}
 .onum{font-size:30px;width:32px;text-align:center;color:var(--chalk-dim);flex:none}
 .oname{flex:1;min-width:0;background:none;border:0;color:var(--chalk);font:inherit;font-size:26px;text-align:left;display:flex;align-items:baseline;gap:10px;min-height:56px;padding:4px 6px}
 .oname .full{font-size:18px;color:var(--chalk-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .oname.empty{color:var(--chalk-dim);font-size:20px}
-.arr{flex:none;width:58px;min-height:56px;border:2px solid var(--chalk-line);background:transparent;color:var(--chalk);border-radius:8px;font-size:24px}
-.arr[disabled]{opacity:.3}
+.odrag{flex:none;width:36px;text-align:center;color:var(--chalk-dim);font-size:22px;letter-spacing:-2px;opacity:.85;pointer-events:none}
+.orow.sel .odrag{color:var(--brass);opacity:1}
 
 /* League stats (native tables / results / averages) */
 .league-divswitch{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 4px}
