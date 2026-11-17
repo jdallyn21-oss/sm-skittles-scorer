@@ -120,10 +120,12 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .strip .nm{font-size:14px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .strip .sc{font:400 34px/1 'Patrick Hand','Comic Sans MS',cursive}
 .strip .side.lead .sc{color:#E6C27A}
-.strip .dash-wrap{display:inline-flex;align-items:center;gap:6px;justify-content:center}
+.strip .sc-line{display:inline-flex;align-items:baseline;gap:6px}
+.strip .side.r .sc-line{justify-content:flex-end}
 .strip .dash{opacity:.6;font-size:22px}
 .strip .lead-delta{font:700 18px/1 'Work Sans',system-ui,sans-serif;color:#7CC08B;letter-spacing:.02em;white-space:nowrap}
 .strip .msg{text-align:center;font-size:15px;margin-top:4px;opacity:.9}
+.cardhead-mid b{display:block;line-height:1.25}
 
 .tabs{display:flex;gap:6px;margin-bottom:10px}
 .tabs button{flex:1;min-height:52px;border-radius:8px;border:2px solid var(--line);background:var(--card);font-weight:700;font-size:18px}

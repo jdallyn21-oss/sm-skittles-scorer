@@ -1859,27 +1859,30 @@ function cardView(){
   if(sc.mode!=='pins' && (sc.pins.home||sc.pins.away)) msg+=' · pins '+sc.pins.home+'–'+sc.pins.away;
   const locked=c.status==='submitted';
   const chk=checkCard(c);
+  const venue=venueOf(home.div,home.num)||'Venue not set';
   const title=c.quick
     ? (fmt.id==='league' ? `Quick Match · ${fmtDate(c.date)}` : `${fmt.name} cup · ${fmtDate(c.date)}`)
     : `Week ${c.week} · ${fmtDate(c.date)}`;
+  const titleWithVenue=`${title} · ${venue}`;
   const finesOn=finesEnabled(c);
   const finesToggle=locked?'':`<button type="button" class="fines-toggle ${finesOn?'on':'off'}" data-a="card-fines" title="When on, the score pad shows a Fine button. Marks do not change the score." aria-pressed="${finesOn?'true':'false'}"><i class="fines-light" aria-hidden="true"></i><span>Mark fines</span></button>`;
   let h=`<div class="wrap wide">
     <div class="cardhead"><button class="back" data-a="back">‹ Fixtures</button>
-      <div class="cardhead-mid"><b>${title}</b><br><span class="muted small">${esc(fmt.summary)}</span><br><span class="muted small">${esc(venueOf(home.div,home.num)||'Venue not set')}</span></div>
+      <div class="cardhead-mid"><b>${esc(titleWithVenue)}</b><br><span class="muted small">${esc(fmt.summary)}</span></div>
       <div class="cardhead-right">${finesToggle}<div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
   const leadBy=Math.abs(th-ta);
   const homeLead=th>ta, awayLead=ta>th;
-  const midDash=homeLead
-    ? `<span class="dash-wrap"><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span><span class="dash">–</span></span>`
-    : awayLead
-      ? `<span class="dash-wrap"><span class="dash">–</span><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span></span>`
-      : `<span class="dash">–</span>`;
+  const homeSc=homeLead
+    ? `<span class="sc-line"><span class="sc">${th}</span><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span></span>`
+    : `<span class="sc">${th}</span>`;
+  const awaySc=awayLead
+    ? `<span class="sc-line"><span class="lead-delta" aria-label="Lead +${leadBy}">+${leadBy}</span><span class="sc">${ta}</span></span>`
+    : `<span class="sc">${ta}</span>`;
   h+=`<div class="strip" aria-live="polite"><div class="row">
-      <div class="side ${homeLead?'lead':''}"><span class="nm">${esc(hn)}</span><span class="sc">${th}</span></div>${midDash}
-      <div class="side r ${awayLead?'lead':''}"><span class="nm">${esc(an)}</span><span class="sc">${ta}</span></div></div>
+      <div class="side ${homeLead?'lead':''}"><span class="nm">${esc(hn)}</span>${homeSc}</div><span class="dash">–</span>
+      <div class="side r ${awayLead?'lead':''}"><span class="nm">${esc(an)}</span>${awaySc}</div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
     <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
     <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
