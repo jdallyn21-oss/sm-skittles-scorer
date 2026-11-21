@@ -208,6 +208,49 @@ function similar(typed, list){
 }
 function fmtDate(iso){ return new Date(iso+'T12:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }
 function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function isISODate(s){ return typeof s==='string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+/** Scheduled fixture night (league calendar), not necessarily when it was played. */
+function fixtureScheduleDate(key, c){
+  if(c && isISODate(c.date)) return c.date;
+  if(!key || !session) return null;
+  const f=fixturesFor(session.div,session.num).find(x=>x&&x.key===key&&!x.bye);
+  return f&&isISODate(f.date)?f.date:null;
+}
+/** Night the game was actually played — playedOn when set, else scheduled date. */
+function cardPlayedOnDate(c){
+  if(!c) return null;
+  if(isISODate(c.playedOn)) return c.playedOn;
+  if(isISODate(c.date)) return c.date;
+  return null;
+}
+function cardPlayedOnDiffers(c){
+  return !!(c && isISODate(c.playedOn) && isISODate(c.date) && c.playedOn!==c.date);
+}
+/**
+ * Clear only for current/upcoming fixtures or accidental in-progress drafts.
+ * Locked once a result is settled in the past (submitted + play/schedule date before today,
+ * or a past scoreline with no editable draft).
+ */
+function canClearMatch(key){
+  if(!key) return false;
+  if(/^(qm-|quick-|tg-)/i.test(String(key))) return true; // quick/tryout use Delete; if Clear is offered, allow
+  const c=cards[key];
+  const sched=fixtureScheduleDate(key, c);
+  const today=todayISO();
+  // True accidental in-progress: draft that was never submitted — always allow Clear
+  const wasSettled=!!(c && (c.status==='submitted' || c.submittedAt));
+  if(c && !wasSettled) return true;
+  // Settled (submitted, or re-opened via Change the card): lock once play/schedule night is past
+  const eff=(c&&cardPlayedOnDate(c))||sched;
+  if(eff && eff<today) return false;
+  // No local card — do not clear historical past scorelines from seed/live overlay
+  if(!c && sched && sched<today) return false;
+  return true;
+}
+function clearBlockedReason(key){
+  if(canClearMatch(key)) return '';
+  return 'This result is in the past and cannot be cleared. Use Change the card only for same-night corrections, or ask the league organiser.';
+}
 function timeNow(){ return new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
 
 function rosterFor(d,n){
@@ -588,6 +631,11 @@ function isLeagueFixtureKey(key){
  */
 async function clearMatchCard(key){
   if(!key) return;
+  if(!canClearMatch(key)){
+    ui.msg=clearBlockedReason(key);
+    render();
+    return;
+  }
   const c=cards[key];
   const league=isLeagueFixtureKey(key);
   const label=fixtureLabelForKey(key);
@@ -832,6 +880,9 @@ function exportJSON(c){
     homeName:sideName(c,'home'), awayName:sideName(c,'away'),
     homeScore:sc.home,awayScore:sc.away,homePins:sc.pins.home,awayPins:sc.pins.away,
     homeTotal:sc.home,awayTotal:sc.away,
+    date:c.date||null,
+    playedOn:isISODate(c.playedOn)?c.playedOn:null,
+    playedOnDate:cardPlayedOnDate(c),
     notes:(c.notes&&String(c.notes).trim())||null,
     savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,
     mainSource:!!c.mainSource,
@@ -1481,7 +1532,7 @@ function pdfPad(s,w,dir){
 }
 function matchPdfFileName(c){
   const slug=s=>pdfSafe(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
-  return 'skittles-'+slug(sideName(c,'home'))+'-v-'+slug(sideName(c,'away'))+'-'+(c.date||todayISO())+'.pdf';
+  return 'skittles-'+slug(sideName(c,'home'))+'-v-'+slug(sideName(c,'away'))+'-'+(cardPlayedOnDate(c)||c.date||todayISO())+'.pdf';
 }
 function matchPdfLines(c){
   const hn=sideName(c,'home'), an=sideName(c,'away');
@@ -1528,7 +1579,12 @@ function matchPdfLines(c){
   const kind=c.tryout
     ? ('Quick game try-out · '+fmt.slots+' a side')
     : (c.quick?(fmt.id==='league'?'Quick Match':fmt.name+' cup'):('Week '+c.week));
-  lines.push({t:pdfSafe(kind)+'  |  '+pdfSafe(fmtDate(c.date)), size:10, gap:2});
+  const playedOn=cardPlayedOnDate(c);
+  if(cardPlayedOnDiffers(c)){
+    lines.push({t:pdfSafe(kind)+'  |  Scheduled '+pdfSafe(fmtDate(c.date))+'  |  Played '+pdfSafe(fmtDate(c.playedOn)), size:10, gap:2});
+  } else {
+    lines.push({t:pdfSafe(kind)+'  |  '+pdfSafe(fmtDate(playedOn||c.date)), size:10, gap:2});
+  }
   const ven=c.tryout?'Try-out (not a league fixture)':venueOf(home.div,home.num);
   if(ven) lines.push({t:pdfSafe(ven), size:9, gap:2});
   if(c.status==='submitted' && c.submittedAt){
@@ -2123,7 +2179,7 @@ function fixturesView(){
       <p class="muted small" style="margin:10px 0 14px">${home?'As the home team, you score this one. ':'The home team scores this one, but you can score it if they can\'t. '}Either team can make changes.</p>`;
     if(c && c.status==='submitted'){
       h+=`<button class="btn block" data-a="open" data-key="${nx.key}">View or change the card</button>`;
-      h+=`<button class="btn quiet block" data-a="clear-fixture" data-key="${nx.key}" style="margin-top:8px">Clear this card</button>`;
+      if(canClearMatch(nx.key)) h+=`<button class="btn quiet block" data-a="clear-fixture" data-key="${nx.key}" style="margin-top:8px">Clear this card</button>`;
     } else if(needsPick){
       h+=`<div class="entry-pick-actions">
         <button class="btn block" data-a="open-mode" data-key="${nx.key}" data-mode="live">Score game</button>
@@ -2134,12 +2190,12 @@ function fixturesView(){
     } else {
       const modeLabel=isScorecardMode(c)?'Carry on marking scorecard':'Carry on scoring';
       h+=`<button class="btn block" data-a="open" data-key="${nx.key}">${modeLabel}</button>`;
-      h+=`<button class="btn quiet block" data-a="clear-fixture" data-key="${nx.key}" style="margin-top:8px">Clear this card</button>`;
+      if(canClearMatch(nx.key)) h+=`<button class="btn quiet block" data-a="clear-fixture" data-key="${nx.key}" style="margin-top:8px">Clear this card</button>`;
     }
     h+='</div>';
   }
   h+=`<div class="card"><b>All fixtures</b>
-    <p class="muted small" style="margin:6px 0 10px">Clear wipes an accidental or test game (and the scoreline on this list).</p>`;
+    <p class="muted small" style="margin:6px 0 10px">Clear is only for current/upcoming or accidental in-progress games — past settled results stay locked.</p>`;
   list.forEach(f=>{
     if(f.bye){ h+=`<div class="frow"><span>${fmtDate(f.date)} · Week ${f.week}</span><span class="muted">Bye</span></div>`; return; }
     const c=cards[f.key], home=f.home===n, opp=teamName(d,home?f.away:f.home);
@@ -2149,8 +2205,9 @@ function fixturesView(){
       st=fixtureResultHtml(f, played, n);
     } else if(c&&c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
     else if(c) st='<span class="state-wait">In progress</span>';
-    const showClear=!!(c || played);
-    const inner=`<span><b>${fmtDate(f.date)}</b> · Week ${f.week}<br><span class="muted small">${home?'Home':'Away'} v ${esc(opp)}</span></span>${st}`;
+    const playedNote=c&&cardPlayedOnDiffers(c)?`<br><span class="muted small">Played ${esc(fmtDate(c.playedOn))}</span>`:'';
+    const showClear=canClearMatch(f.key) && !!(c || played);
+    const inner=`<span><b>${fmtDate(f.date)}</b> · Week ${f.week}<br><span class="muted small">${home?'Home':'Away'} v ${esc(opp)}</span>${playedNote}</span>${st}`;
     if(showClear){
       h+=`<div class="qm-row">
         <button class="frow qm-open" data-a="open" data-key="${f.key}">${inner}</button>
@@ -2423,11 +2480,24 @@ function cardView(){
   if(!locked && isScorecardMode(c)){
     h+=`<div class="banner demo" role="status">Marking scorecard — one evening total per player. Use notes for specials like 27s. Set the line up before or as you fill. Finish, signatures, and submit work the same as live scoring.</div>`;
   }
-  // Clear available for in-progress (and submitted) — not buried under Finish
-  h+=`<div class="clear-card-bar">
-    <button type="button" class="btn quiet block" data-a="clear-card">Clear this card</button>
-    <p class="muted small" style="margin:6px 0 12px">Wrong, test, or opened by accident? Wipes this phone${shouldCloudSync(c)?' and removes it from the league / fixtures list':''}.</p>
-  </div>`;
+  // Played-on date — for back matches / rearranged nights
+  if(!c.tryout){
+    const sched=isISODate(c.date)?c.date:'';
+    const playedVal=isISODate(c.playedOn)?c.playedOn:(sched||'');
+    h+=`<section class="card played-on-card" aria-label="Played on date">
+      <label class="field" for="playedOn">Played on</label>
+      <input type="date" id="playedOn" value="${esc(playedVal)}" ${locked?'disabled':''}>
+      <p class="muted small" style="margin:6px 0 0">${sched?`Scheduled ${esc(fmtDate(sched))}. `:''}Change if this match was played on a different night.</p>
+      ${cardPlayedOnDiffers(c)?`<p class="muted small" style="margin:4px 0 0"><b>Played ${esc(fmtDate(c.playedOn))}</b> (not the scheduled date).</p>`:''}
+    </section>`;
+  }
+  // Clear only for current/upcoming or accidental in-progress — locked once settled in the past
+  if(canClearMatch(c.key)){
+    h+=`<div class="clear-card-bar">
+      <button type="button" class="btn quiet block" data-a="clear-card">Clear this card</button>
+      <p class="muted small" style="margin:6px 0 12px">Wrong, test, or opened by accident? Wipes this phone${shouldCloudSync(c)?' and removes it from the league / fixtures list':''}.</p>
+    </div>`;
+  }
   if(!locked && !cardHasAnyScores(c) && (c.entryMode==='live'||c.entryMode==='scorecard')){
     const other=isScorecardMode(c)?'live':'scorecard';
     const otherLabel=other==='scorecard'?'Mark scorecard':'Score game';
@@ -2464,16 +2534,20 @@ function cardView(){
       <ul class="check">${chk.lines.map(l=>`<li class="${l.s==='ok'?'':l.s}">${esc(l.t)}</li>`).join('')}</ul>`;
   if(locked){
     h+=`${pdfActionsHtml(c)}
-        <button class="btn quiet block" data-a="edit" style="margin-top:8px">Change the card</button>
-        <button class="btn quiet block" data-a="clear-card" style="margin-top:8px">Clear this card</button>
-        <p class="muted small" style="margin:8px 0 0">Clear wipes scores on this phone${shouldCloudSync(c)?' and removes the match from the league site':''}. Use when this was a test or the wrong game.</p>
-        <details style="margin-top:14px"><summary class="muted">Result data (what will go to the site)</summary><pre>${esc(JSON.stringify(exportJSON(c),null,1))}</pre></details>`;
+        <button class="btn quiet block" data-a="edit" style="margin-top:8px">Change the card</button>`;
+    if(canClearMatch(c.key)){
+      h+=`<button class="btn quiet block" data-a="clear-card" style="margin-top:8px">Clear this card</button>
+        <p class="muted small" style="margin:8px 0 0">Clear wipes scores on this phone${shouldCloudSync(c)?' and removes the match from the league site':''}. Only for same-night / current fixtures.</p>`;
+    }
+    h+=`<details style="margin-top:14px"><summary class="muted">Result data (what will go to the site)</summary><pre>${esc(JSON.stringify(exportJSON(c),null,1))}</pre></details>`;
   } else {
     h+=`<button class="btn block" data-a="submit" ${chk.blockers.length?'disabled':''}>Submit result</button>`;
     if(chk.blockers.length) h+=`<p class="muted small" style="text-align:center;margin:8px 0 0">Fix the red items to submit.</p>`;
     h+=pdfActionsHtml(c);
-    h+=`<button class="btn quiet block" data-a="clear-card" style="margin-top:12px">Clear this card</button>
+    if(canClearMatch(c.key)){
+      h+=`<button class="btn quiet block" data-a="clear-card" style="margin-top:12px">Clear this card</button>
         <p class="muted small" style="margin:8px 0 0">Wipe a wrong or test game${shouldCloudSync(c)?' (also removes it from the league site)':''}.</p>`;
+    }
   }
   h+=`</section></div>`;
   return h;
@@ -2990,6 +3064,14 @@ document.addEventListener('input',e=>{
   if(e.target.id==='cardNotes'){
     const c=curCard(); if(!c||c.status==='submitted') return;
     c.notes=e.target.value; persist(c.key);
+  }
+  if(e.target.id==='playedOn'){
+    const c=curCard(); if(!c||c.status==='submitted') return;
+    const v=String(e.target.value||'').trim();
+    if(!v){ c.playedOn=null; }
+    else if(isISODate(v)){ c.playedOn=(isISODate(c.date)&&v===c.date)?null:v; }
+    else return;
+    persist(c.key); render();
   }
 });
 document.addEventListener('focusin',e=>{

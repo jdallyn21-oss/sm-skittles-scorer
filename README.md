@@ -35,19 +35,21 @@ Login short names (for example `COLT`, `FARM`) are stored in seed data with each
 
 From the home (login) screen, **Start Quick game** opens a pins practice game with **no team PIN**. Choose 2–8 players a side, consecutive rubs **1** or **2** (South Molton default 2), name the sides, then the same **Score game** / **Mark scorecard** chooser. Type player names freely; recent names stay on the phone. Try-outs do **not** feed league tables or cloud sync. Use **Team login** to leave try-out mode.
 
+## Played on (back matches)
+
+On a match card, **Played on** lets scorers set the night the game was actually played when it differs from the fixture schedule. Shown on the card, All fixtures (when different), the result PDF, and the sync payload (`playedOn` / `playedOnDate`).
+
 ## Clear a wrong or test card
 
-**Clear** is available for in-progress and submitted games:
+**Clear** is only for **current/upcoming** fixtures or **accidental in-progress** drafts. Once a result is **settled in the past** (submitted with play/schedule date before today, or a past scoreline with no draft), Clear is locked.
+
+Where Clear still shows:
 
 1. On the open card — **Clear this card** near the top (also under Finish).
-2. On **All fixtures** — **Clear** beside any In progress / scored row.
-3. On the Next match hero when a card is already open — **Clear this card**.
+2. On **All fixtures** — **Clear** beside eligible In progress / same-night rows.
+3. On the Next match hero when a card is open and Clear is allowed.
 
-Confirm the dialog. That:
-
-- Wipes scores, photo, and signatures **on this phone**
-- Clears the **fixtures list scoreline** (seed / live cache / league-stats overlay)
-- For **league fixtures**, calls Supabase `skittles_delete_card` so the match leaves the league site
+Confirm the dialog. That wipes the phone card, fixtures scoreline overlay, and (for league fixtures) calls Supabase `skittles_delete_card`.
 
 Quick Match / try-out: use **Delete** on the fixtures list (phone only).
 
