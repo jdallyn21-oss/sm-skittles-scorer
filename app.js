@@ -1198,6 +1198,8 @@ async function flushSupabaseQueue(){
   }finally{
     sbUi.flushing=false;
     await refreshSbPendingCount();
+    // Refresh post-submit banner (Uploading… → Uploaded) and fixtures sync status
+    if(ui.screen==='card' || ui.screen==='fixtures') render();
   }
 }
 async function applyRemoteCard(row){
@@ -1275,6 +1277,31 @@ function cloudSyncStatusHtml(){
     return `<div class="banner bad" role="status">Phone sync hiccup: ${esc(sbUi.lastErr)}. Scoring still works on this phone.</div>`;
   }
   return '';
+}
+/** Post-submit banner: league fixtures reflect Supabase upload state; Quick/try-out stay phone-only. */
+function submittedBannerHtml(c){
+  const when=esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
+  const tail=` Use Share / Download PDF to keep a copy. Tap "Change the card" if something needs correcting.`;
+  if(!shouldCloudSync(c)){
+    return `<div class="banner ok">Submitted at ${when}. Saved on this phone only (not a league fixture — nothing uploaded).${tail}</div>`;
+  }
+  if(!supabaseConfigured()){
+    return `<div class="banner ok">Submitted at ${when}. Saved on this phone. League cloud sync is not set up on this install.${tail}</div>`;
+  }
+  if(sbUi.setupNeeded){
+    return `<div class="banner bad">Submitted at ${when}. Saved on this phone — league sync needs organiser setup (team PIN list).${tail}</div>`;
+  }
+  const uploaded=!!(c.cloudUpdatedAt && !c.cloudDirty);
+  if(uploaded){
+    return `<div class="banner ok">Submitted at ${when}. Uploaded to the league — other phones on this team can see it when online.${tail}</div>`;
+  }
+  if(navigator.onLine===false){
+    return `<div class="banner demo" role="status">Submitted at ${when}. Saved on this phone — will upload to the league when you are back online.${tail}</div>`;
+  }
+  if(sbUi.lastErr && c.cloudDirty){
+    return `<div class="banner bad">Submitted at ${when}. Saved on this phone — upload failed (${esc(sbUi.lastErr)}). Will retry when online.${tail}</div>`;
+  }
+  return `<div class="banner demo" role="status">Submitted at ${when}. Uploading to the league…${tail}</div>`;
 }
 /* ---------- result PDF (offline, no library) ---------- */
 function pdfSafe(s){
@@ -2226,7 +2253,7 @@ function cardView(){
       <div class="cardhead-right">${finesToggle}<div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
-  if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
+  if(locked) h+=submittedBannerHtml(c);
   if(!locked && isScorecardMode(c)){
     h+=`<div class="banner demo" role="status">Marking scorecard — one evening total per player. Use notes for specials like 27s. Set the line up before or as you fill. Finish, signatures, and submit work the same as live scoring.</div>`;
   }
