@@ -152,6 +152,11 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 /* After-play scorecard: show the full card (both sides) like paper, even on phones */
 .boards.scorecard-boards .board{display:block}
 .tabs.scorecard-tabs{display:none}
+/* Evening totals only — one big total cell per player, no rub grid */
+.scorecard-total-score{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center}
+.evening-total{min-height:52px;background:transparent;border:1px solid var(--chalk-line);color:var(--chalk);font:700 34px/1.1 'Patrick Hand','Comic Sans MS',cursive;padding:4px 10px;text-align:right;text-shadow:0.45px 0 0 currentColor,-0.45px 0 0 currentColor}
+.evening-total.sel{outline:3px solid var(--brass);outline-offset:-3px;background:rgba(176,141,79,.28)}
+.prow.scorecard-total-row{padding:6px 0 8px}
 @media (min-width:860px){
   .boards{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
   .board{display:block}

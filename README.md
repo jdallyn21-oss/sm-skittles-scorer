@@ -40,7 +40,7 @@ From the home (login) screen, **Start Quick game** opens a pins practice game wi
 On a fixture (and when starting a Quick Match / Cup or Quick game try-out), scorers choose how to enter scores. **Score game** is the primary option:
 
 - **Score game** — live score-as-you-go, rub by rub while they play (existing flow).
-- **Mark scorecard** — fill the full card after play (tap any box, like paper). Both sides stay visible. Finish, chalkboard photo, captain signatures, PDF, and submit/sync use the same path as live scoring.
+- **Mark scorecard** — after play, enter **one evening total per player** (not rub-by-rub). Both sides stay visible. Use **Notes (special scores)** for 27s and similar. Finish, chalkboard photo, captain signatures, PDF, and submit/sync use the same path as live scoring. The evening total is mirrored into the sync payload so league pin totals still add up.
 
 League fixtures still feed league tables; Quick Matches / cups / try-outs do not. Team PIN only for real teams — no admin setup for scorers.
 
@@ -59,7 +59,7 @@ Then choose home or away and the opposing team. Cards list under **Your Quick Ma
 
 ## Share result PDF
 
-On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. The PDF keeps the card’s line up and uses **Rub Score** (then Each rub, when double rubs) to match the board.
+On a completed match card (submitted, or fully ready to submit), use **Share result PDF** to open the phone share sheet with a PDF of the scores, or **Download PDF** to save the file. Works offline for league fixtures and Quick Matches. Live **Score game** PDFs keep the card’s line up and use **Rub Score** (then Each rub, when double rubs). **Mark scorecard** PDFs list player evening totals only (plus notes).
 
 ## Live URL
 

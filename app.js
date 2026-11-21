@@ -2,6 +2,7 @@
 'use strict';
 const SEED = window.SEED;
 const MAXBOX = 27;
+const MAX_EVENING = 999; // Mark scorecard: one evening total per player (not per-rub)
 const $app = document.getElementById('app');
 
 /* ---------- match formats (league + cups) ---------- */
@@ -161,8 +162,11 @@ function savePcPrefs(){
 }
 function typeScoreDigit(k){
   if(!ui.sel) return;
+  const evening=!!ui.sel.total;
+  const max=evening?MAX_EVENING:MAXBOX;
+  const maxLen=evening?3:2;
   let e=ui.fresh?'':ui.entry; ui.fresh=false; e=e+k;
-  if(e.length>2||+e>MAXBOX) e=k;
+  if(e.length>maxLen||+e>max) e=k;
   ui.entry=e; setVal(+e); scrollToSel();
 }
 function typeScoreBackspace(){
@@ -343,7 +347,7 @@ function tryoutGamesList(){
 /* ---------- card model ---------- */
 function blankSide(fmt){
   fmt=fmt||FORMATS.league;
-  return Array.from({length:fmt.slots},()=>({name:'',boxes:Array(fmt.rubs).fill(null),spare:Array(fmt.rubs).fill(false),fine:Array(fmt.rubs).fill(0)}));
+  return Array.from({length:fmt.slots},()=>({name:'',total:null,boxes:Array(fmt.rubs).fill(null),spare:Array(fmt.rubs).fill(false),fine:Array(fmt.rubs).fill(0)}));
 }
 /** Fine marks per box (notch count). Booleans from older cards become 0/1. Not capped at 2. */
 const FINE_CYCLE_MAX = 9;
@@ -404,9 +408,46 @@ function ensureCard(f){
 function isScorecardMode(c){
   return !!(c && c.entryMode==='scorecard');
 }
+function playerHasEveningTotal(p){
+  if(!p || p.total===null || p.total===undefined || p.total==='') return false;
+  return Number.isFinite(Number(p.total));
+}
+/** Pins for display/sync: evening total wins when set (scorecard); else sum of rub boxes (live). */
+function playerPins(p){
+  if(playerHasEveningTotal(p)){
+    const n=Math.floor(Number(p.total));
+    return Number.isFinite(n) && n>0 ? n : (Number.isFinite(n)?Math.max(0,n):0);
+  }
+  return (p&&p.boxes)?p.boxes.reduce((s,v)=>s+(v||0),0):0;
+}
+function playerScoreEntered(p){
+  if(!p) return false;
+  if(playerHasEveningTotal(p)) return true;
+  return !!(p.boxes && p.boxes.some(v=>v!==null));
+}
+/** Mirror evening total into boxes[0] so league SQL (sums boxes) still gets the pins. */
+function mirrorEveningTotalToBoxes(p, rubs){
+  const n=rubs||6;
+  if(!p.boxes || p.boxes.length!==n) p.boxes=Array(n).fill(null);
+  else for(let i=0;i<n;i++) p.boxes[i]=null;
+  if(!p.spare || p.spare.length!==n) p.spare=Array(n).fill(false);
+  else for(let i=0;i<n;i++) p.spare[i]=false;
+  if(!p.fine || !Array.isArray(p.fine) || p.fine.length!==n) p.fine=Array(n).fill(0);
+  else for(let i=0;i<n;i++) p.fine[i]=0;
+  if(playerHasEveningTotal(p)){
+    const v=Math.floor(Number(p.total));
+    if(Number.isFinite(v)) p.boxes[0]=Math.max(0, Math.min(MAX_EVENING, v));
+  }
+}
+function setEveningTotal(c, side, slot, v){
+  const p=c.players[side][slot], fmt=cardFormat(c);
+  if(v===null || v==='' || !Number.isFinite(Number(v))) p.total=null;
+  else p.total=Math.max(0, Math.min(MAX_EVENING, Math.floor(Number(v))));
+  mirrorEveningTotalToBoxes(p, fmt.rubs);
+}
 function cardHasAnyScores(c){
   if(!c||!c.players) return false;
-  return ['home','away'].some(side=>(c.players[side]||[]).some(p=>p && p.boxes && p.boxes.some(v=>v!==null)));
+  return ['home','away'].some(side=>(c.players[side]||[]).some(playerScoreEntered));
 }
 function cardNeedsEntryPick(c){
   if(!c) return true;
@@ -488,6 +529,7 @@ function startQuickMatch(){
 }
 function persist(key){
   if(key && cards[key]){
+    ensureScorecardMirrors(cards[key]);
     cards[key].savedAt=timeNow();
     cards[key].cloudDirty=true;
     idbPut('cards',key,cards[key]).then(()=>{
@@ -506,16 +548,18 @@ function groupsFor(c){
   return Array.from({length:n},(_,i)=>[i]);
 }
 const isSpare = (p,b) => { const v=p.boxes[b]; return v!==null && (v>9 || (v===9 && p.spare[b])); };
-const pinsOf = p => p.boxes.reduce((s,v)=>s+(v||0),0);
+const pinsOf = p => playerPins(p);
 function colTotals(c,list){
+  if(isScorecardMode(c)) return [];
   const n=cardFormat(c).rubs;
   return Array.from({length:n},(_,col)=>list.reduce((s,p)=>s+(p.boxes[col]||0),0));
 }
 function pinsUp(c,list){
+  if(isScorecardMode(c)) return [];
   const ct=colTotals(c,list);
   return groupsFor(c).map(g=>g.reduce((s,col)=>s+ct[col],0));
 }
-const teamPins = list => list.reduce((s,p)=>s+pinsOf(p),0);
+const teamPins = list => list.reduce((s,p)=>s+playerPins(p),0);
 function mfmRubPoints(c){
   const fmt=cardFormat(c); let h=0,a=0;
   for(let slot=0;slot<fmt.slots;slot++){
@@ -538,9 +582,20 @@ function mfmTotalPoints(c){
   }
   return {home:h,away:a};
 }
+function ensureScorecardMirrors(c){
+  if(!isScorecardMode(c)||!c.players) return;
+  const rubs=cardFormat(c).rubs;
+  ['home','away'].forEach(side=>{
+    (c.players[side]||[]).forEach(p=>{ if(p) mirrorEveningTotalToBoxes(p, rubs); });
+  });
+}
 function matchScore(c){
   const fmt=cardFormat(c);
   const pins={home:teamPins(c.players.home),away:teamPins(c.players.away)};
+  // Scorecard is evening totals only — result is always pin totals (no per-rub MFM).
+  if(isScorecardMode(c)){
+    return {home:pins.home, away:pins.away, pins, mode:'pins', unit:'pins', max:null, caption:'Pin total (scorecard)'};
+  }
   if(fmt.scoring==='mfm-rub'){
     const pts=mfmRubPoints(c);
     return {home:pts.home, away:pts.away, pins, mode:'mfm-rub', unit:'pts', max:fmt.maxScore,
@@ -562,13 +617,11 @@ function entryOrder(c){
   }));
   return out;
 }
-/** After-play / paper-card order: fill each player's rubs left-to-right, home then away. */
+/** Scorecard order: one evening total per player, home then away. */
 function scorecardEntryOrder(c){
   const fmt=cardFormat(c), out=[];
   ['home','away'].forEach(side=>{
-    for(let slot=0;slot<fmt.slots;slot++){
-      for(let box=0;box<fmt.rubs;box++) out.push({side,slot,box});
-    }
+    for(let slot=0;slot<fmt.slots;slot++) out.push({side,slot,total:true});
   });
   return out;
 }
@@ -576,7 +629,11 @@ function activeEntryOrder(c){
   return isScorecardMode(c) ? scorecardEntryOrder(c) : entryOrder(c);
 }
 function startSide(c){
-  const o=activeEntryOrder(c).find(x=>{ const p=c.players[x.side][x.slot]; return p.name && p.boxes[x.box]===null; });
+  if(isScorecardMode(c)){
+    const o=scorecardEntryOrder(c).find(x=>{ const p=c.players[x.side][x.slot]; return p.name && !playerHasEveningTotal(p); });
+    return o?o.side:'home';
+  }
+  const o=entryOrder(c).find(x=>{ const p=c.players[x.side][x.slot]; return p.name && p.boxes[x.box]===null; });
   return o?o.side:'home';
 }
 
@@ -584,12 +641,24 @@ function startSide(c){
 function checkCard(c){
   const blockers=[], warnings=[], lines=[];
   const fmt=cardFormat(c);
+  const totalsOnly=isScorecardMode(c);
   ['home','away'].forEach(side=>{
     const list=c.players[side], nm=sideName(c,side);
     const named=list.filter(p=>p.name);
+    if(!named.length){ blockers.push(nm+': no players chosen'); lines.push({t:nm+': no players chosen',s:'no'}); return; }
+    if(totalsOnly){
+      const empty=named.filter(p=>!playerHasEveningTotal(p)).length;
+      const orphan=list.filter(p=>!p.name && playerHasEveningTotal(p)).length;
+      if(orphan){ blockers.push(nm+': totals entered for a slot with no player'); lines.push({t:nm+': a total has no player name',s:'no'}); }
+      if(empty){ blockers.push(nm+': '+empty+' evening total'+(empty>1?'s':'')+' still empty'); lines.push({t:nm+': '+empty+' evening total'+(empty>1?'s':'')+' still empty',s:'no'}); }
+      else if(!orphan){
+        if(named.length<fmt.slots) lines.push({t:nm+': '+named.length+' players, all totals entered',s:'warn'});
+        else lines.push({t:nm+': '+fmt.slots+' players, all totals entered',s:'ok'});
+      }
+      return;
+    }
     const empty=named.reduce((n,p)=>n+p.boxes.filter(v=>v===null).length,0);
     const orphan=list.filter(p=>!p.name && p.boxes.some(v=>v!==null)).length;
-    if(!named.length){ blockers.push(nm+': no players chosen'); lines.push({t:nm+': no players chosen',s:'no'}); return; }
     if(orphan){ blockers.push(nm+': scores entered for a slot with no player'); lines.push({t:nm+': a score has no player name',s:'no'}); }
     if(empty){ blockers.push(nm+': '+empty+' box'+(empty>1?'es':'')+' still empty'); lines.push({t:nm+': '+empty+' box'+(empty>1?'es':'')+' still empty',s:'no'}); }
     else if(!orphan){
@@ -610,10 +679,17 @@ function checkCard(c){
   return {blockers,warnings,lines};
 }
 function exportJSON(c){
-  const mk=side=>c.players[side].filter(p=>p.name).map(p=>({name:p.name,pins:pinsOf(p),boxes:p.boxes.slice(),spares:p.boxes.map((v,i)=>isSpare(p,i)?i+1:0).filter(Boolean)}));
+  ensureScorecardMirrors(c);
+  const totalsOnly=isScorecardMode(c);
+  const mk=side=>c.players[side].filter(p=>p.name).map(p=>{
+    const row={name:p.name,pins:playerPins(p),boxes:p.boxes.slice(),spares:p.boxes.map((v,i)=>isSpare(p,i)?i+1:0).filter(Boolean)};
+    if(totalsOnly || playerHasEveningTotal(p)) row.total=playerHasEveningTotal(p)?Math.floor(Number(p.total)):null;
+    return row;
+  });
   const home=sideMeta(c,'home'), away=sideMeta(c,'away'), fmt=cardFormat(c), sc=matchScore(c);
   return {key:c.tryout?'tryout-'+c.key:(c.quick?'quick-'+c.key:'w'+c.week+'m'+c.mi),
     quick:!!c.quick, tryout:!!c.tryout, format:fmt.id,formatName:fmt.name,scoring:fmt.scoring,
+    entryMode:c.entryMode||null, totalsOnly:totalsOnly||undefined,
     division:feedsLeagueTables(c)?c.div+1:null,
     homeDivision:home.div!=null?home.div+1:null, awayDivision:away.div!=null?away.div+1:null,
     homeNum:home.num!=null?home.num:null, awayNum:away.num!=null?away.num:null,
@@ -1230,10 +1306,11 @@ function matchPdfLines(c){
   const sc=matchScore(c), fmt=cardFormat(c);
   const home=sideMeta(c,'home');
   const unit=sc.mode==='pins'?'':' pts';
-  const rubs=fmt.rubs;
-  // Portrait mono table: name + rub cols + total (~62 Courier chars)
-  const nameW=Math.max(12, 62 - (rubs*4) - 5);
-  const colW=4, totW=5;
+  const totalsOnly=isScorecardMode(c);
+  const rubs=totalsOnly?0:fmt.rubs;
+  // Portrait mono table: name + rub cols + total (~62 Courier chars) — scorecard is name + Tot only
+  const nameW=totalsOnly?Math.max(28, 52):Math.max(12, 62 - (rubs*4) - 5);
+  const colW=4, totW=totalsOnly?8:5;
   const tableW=nameW + rubs*colW + totW;
   const rule=(ch)=>({t:ch.repeat(tableW), mono:true, size:8, gap:2});
   const rowPlayer=(label, boxes, tot)=>{
@@ -1249,7 +1326,7 @@ function matchPdfLines(c){
   const hdr=(()=>{
     let t=pdfPad('Player',nameW);
     for(let i=0;i<rubs;i++) t+=pdfPad('R'+(i+1), colW, 'r');
-    t+=pdfPad('Tot', totW, 'r');
+    t+=pdfPad(totalsOnly?'Total':'Tot', totW, 'r');
     return {t, mono:true, size:8, gap:2};
   })();
 
@@ -1264,6 +1341,7 @@ function matchPdfLines(c){
   if(sc.home===sc.away) lines.push({t:'DRAW', bold:true, size:12, gap:6});
   else lines.push({t:pdfSafe((sc.home>sc.away?hn:an)+' win by '+Math.abs(sc.home-sc.away)+unit), bold:true, size:12, gap:6});
   if(sc.mode!=='pins') lines.push({t:'Pins  '+sc.pins.home+' - '+sc.pins.away, size:10, gap:6});
+  if(totalsOnly) lines.push({t:'Marked from scorecard — evening totals only', size:9, gap:6});
 
   const kind=c.tryout
     ? ('Quick game try-out · '+fmt.slots+' a side')
@@ -1279,24 +1357,26 @@ function matchPdfLines(c){
 
   ['home','away'].forEach(side=>{
     const list=c.players[side], tot=teamPins(list), nm=sideName(c,side);
-    const ct=colTotals(c,list), ups=pinsUp(c,list);
     lines.push({t:(side==='home'?'HOME':'AWAY')+'  '+pdfSafe(nm), bold:true, size:11, gap:2});
     lines.push({t:'Pins total  '+tot, size:10, gap:4});
     lines.push(rule('-'));
     lines.push(hdr);
     lines.push(rule('-'));
     list.forEach(p=>{
-      lines.push(rowPlayer(playerLabel(p), p.boxes, p.name?pinsOf(p):null));
+      if(totalsOnly) lines.push(rowPlayer(playerLabel(p), [], p.name && playerHasEveningTotal(p)?playerPins(p):null));
+      else lines.push(rowPlayer(playerLabel(p), p.boxes, p.name?pinsOf(p):null));
     });
     lines.push(rule('-'));
-    if(formatUsesPairRubs(c)){
-      // Show paired rub scores under the grid (3 values for 6 rubs)
-      let rubLine=pdfPad('Rub score', nameW);
-      ups.forEach(x=>{ rubLine+=pdfPad(x||'-', colW*2, 'r'); });
-      lines.push({t:rubLine.slice(0, tableW), mono:true, size:8, gap:2});
-      lines.push(rowPlayer('Each rub', ct, tot));
-    } else {
-      lines.push(rowPlayer('Rub score', ups, tot));
+    if(!totalsOnly){
+      const ct=colTotals(c,list), ups=pinsUp(c,list);
+      if(formatUsesPairRubs(c)){
+        let rubLine=pdfPad('Rub score', nameW);
+        ups.forEach(x=>{ rubLine+=pdfPad(x||'-', colW*2, 'r'); });
+        lines.push({t:rubLine.slice(0, tableW), mono:true, size:8, gap:2});
+        lines.push(rowPlayer('Each rub', ct, tot));
+      } else {
+        lines.push(rowPlayer('Rub score', ups, tot));
+      }
     }
     lines.push({t:' ', size:8, gap:8});
   });
@@ -1817,7 +1897,7 @@ function tryoutHubView(){
       const pair=tryoutPairSize(c);
       let st='<span class="muted">Not started</span>';
       if(c.status==='submitted') st='<span class="state-wait">Finished on this phone</span>';
-      else if(c.players.home.some(p=>p.name||p.boxes.some(v=>v!==null))||c.players.away.some(p=>p.name||p.boxes.some(v=>v!==null))) st='<span class="state-wait">In progress</span>';
+      else if(c.players.home.some(p=>p.name||playerScoreEntered(p))||c.players.away.some(p=>p.name||playerScoreEntered(p))) st='<span class="state-wait">In progress</span>';
       h+=`<div class="qm-row">
         <button class="frow qm-open" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · ${fmt.slots} a side · rubs ${pair}<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>
         <button class="qm-del" data-a="delete-quick" data-key="${esc(c.key)}" aria-label="Delete try-out ${esc(home)} versus ${esc(away)}">Delete</button>
@@ -1843,7 +1923,7 @@ function fixturesView(){
       const kind=fmt.id==='league'?'Quick Match':fmt.short+' cup';
       let st='<span class="muted">Not started</span>';
       if(c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
-      else if(c.players.home.some(p=>p.name||p.boxes.some(v=>v!==null))||c.players.away.some(p=>p.name||p.boxes.some(v=>v!==null))) st='<span class="state-wait">In progress</span>';
+      else if(c.players.home.some(p=>p.name||playerScoreEntered(p))||c.players.away.some(p=>p.name||playerScoreEntered(p))) st='<span class="state-wait">In progress</span>';
       h+=`<div class="qm-row">
         <button class="frow qm-open" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · ${esc(kind)}<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>
         <button class="qm-del" data-a="delete-quick" data-key="${esc(c.key)}" aria-label="Delete ${esc(kind)} ${esc(home)} versus ${esc(away)}">Delete</button>
@@ -1910,7 +1990,7 @@ function entryPickView(){
       <button class="btn block" data-a="pick-mode" data-mode="live">Score game</button>
       <p class="muted small entry-pick-hint">Score live as you go, rub by rub while they play.</p>
       <button class="btn quiet block" data-a="pick-mode" data-mode="scorecard" style="margin-top:14px">Mark scorecard</button>
-      <p class="muted small entry-pick-hint">Fill every box after play — like a paper card — then finish and submit as usual.</p>
+      <p class="muted small entry-pick-hint">One evening total per player after play. Use notes for specials like 27s — then finish and submit as usual.</p>
     </div>
   </div>`;
 }
@@ -2066,11 +2146,12 @@ function boxHTML(c,side,slot,box,locked){
   return `<button class="${cls}" ${locked?'disabled':''} data-a="box" data-side="${side}" data-slot="${slot}" data-box="${box}" aria-label="${esc(playerLabel(p))}, box ${box+1}, ${v===null?'empty':v}${fineNote}">${notches}${v===null?'':v}</button>`;
 }
 function sidePlayStarted(list){
-  return (list||[]).some(p=>p && p.boxes && p.boxes.some(v=>v!==null));
+  return (list||[]).some(playerScoreEntered);
 }
 function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
   const list=c.players[side], meta=sideMeta(c,side), locked=c.status==='submitted', fmt=cardFormat(c);
+  const totalsOnly=isScorecardMode(c);
   const ct=colTotals(c,list), ups=pinsUp(c,list), tot=teamPins(list);
   const last=c.tryout?[]:((SEED.lineups[teamKey(meta.div,meta.num)]||[]));
   const grid=`grid-template-columns:repeat(${fmt.rubs},minmax(0,1fr))`;
@@ -2090,6 +2171,14 @@ function boardView(c,side){
     const initBtn=p.name
       ? `<button class="pinit" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}" aria-label="${esc(p.name)}">${esc(initials(p.name))}</button>`
       : `<button class="pinit empty" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}" aria-label="${MISSING_PLAYER}">?</button>`;
+    if(totalsOnly){
+      const sel=ui.sel&&ui.sel.total&&ui.sel.side===side&&ui.sel.slot===slot;
+      const shown=playerHasEveningTotal(p)?String(Math.floor(Number(p.total))):'';
+      h+=`<div class="prow scorecard-total-row">
+        <div class="phead">${fullAbove}</div>
+        <div class="pscore scorecard-total-score">${initBtn}<button type="button" class="evening-total ${sel?'sel':''}" ${locked?'disabled':''} data-a="evening-total" data-side="${side}" data-slot="${slot}" aria-label="${esc(playerLabel(p))}, evening total, ${shown||'empty'}">${shown||'–'}</button></div></div>`;
+      return;
+    }
     h+=`<div class="prow">
       <div class="phead">${fullAbove}</div>
       <div class="pscore">${initBtn}<div class="boxes${fmt.rubs>6?' many':''}" style="${grid}">`+
@@ -2097,11 +2186,13 @@ function boardView(c,side){
        `</div><div class="ptot">${p.boxes.some(v=>v!==null)?pinsOf(p):''}</div></div></div>`;
   });
   h+=`<div class="bfoot">`;
-  if(formatUsesPairRubs(c)){
-    h+=`<div class="lbl">Rub Score</div><div class="upsrow" style="${grid}">${ups.map(x=>`<span>${x||''}</span>`).join('')}</div>
-        <div class="lbl">Each rub</div><div class="colrow" style="${grid}">${ct.map(x=>`<span>${x||''}</span>`).join('')}</div>`;
-  } else {
-    h+=`<div class="lbl">Rub Score</div><div class="upsrow" style="${grid}">${ups.map(x=>`<span class="one">${x||''}</span>`).join('')}</div>`;
+  if(!totalsOnly){
+    if(formatUsesPairRubs(c)){
+      h+=`<div class="lbl">Rub Score</div><div class="upsrow" style="${grid}">${ups.map(x=>`<span>${x||''}</span>`).join('')}</div>
+          <div class="lbl">Each rub</div><div class="colrow" style="${grid}">${ct.map(x=>`<span>${x||''}</span>`).join('')}</div>`;
+    } else {
+      h+=`<div class="lbl">Rub Score</div><div class="upsrow" style="${grid}">${ups.map(x=>`<span class="one">${x||''}</span>`).join('')}</div>`;
+    }
   }
   h+=`<div class="bigtotal"><small>Pins</small><b>${tot}</b></div></div></section>`;
   return h;
@@ -2128,16 +2219,16 @@ function cardView(){
   const titleWithVenue=`${title} · ${venue}`;
   const backLabel=isTryoutSession()?'‹ Quick games':'‹ Fixtures';
   const finesOn=finesEnabled(c);
-  const finesToggle=locked?'':`<button type="button" class="fines-toggle ${finesOn?'on':'off'}" data-a="card-fines" title="When on, the score pad shows a Fine button. Marks do not change the score." aria-pressed="${finesOn?'true':'false'}"><i class="fines-light" aria-hidden="true"></i><span>Mark fines</span></button>`;
+  const finesToggle=(locked||isScorecardMode(c))?'':`<button type="button" class="fines-toggle ${finesOn?'on':'off'}" data-a="card-fines" title="When on, the score pad shows a Fine button. Marks do not change the score." aria-pressed="${finesOn?'true':'false'}"><i class="fines-light" aria-hidden="true"></i><span>Mark fines</span></button>`;
   let h=`<div class="wrap wide">
     <div class="cardhead"><button class="back" data-a="back">${backLabel}</button>
-      <div class="cardhead-mid"><b>${esc(titleWithVenue)}</b><br><span class="muted small">${esc(fmt.summary)}</span></div>
+      <div class="cardhead-mid"><b>${esc(titleWithVenue)}</b><br><span class="muted small">${esc(isScorecardMode(c)?'Evening totals · notes for specials':fmt.summary)}</span></div>
       <div class="cardhead-right">${finesToggle}<div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
   if(!locked && isScorecardMode(c)){
-    h+=`<div class="banner demo" role="status">Marking scorecard — tap any box to enter scores. Set the line up before or as you fill. Finish, signatures, and submit work the same as live scoring.</div>`;
+    h+=`<div class="banner demo" role="status">Marking scorecard — one evening total per player. Use notes for specials like 27s. Set the line up before or as you fill. Finish, signatures, and submit work the same as live scoring.</div>`;
   }
   if(!locked && !cardHasAnyScores(c) && (c.entryMode==='live'||c.entryMode==='scorecard')){
     const other=isScorecardMode(c)?'live':'scorecard';
@@ -2308,23 +2399,31 @@ function rubLabel(c,box){
   return (g.length>1?'Rubs ':'Rub ')+n;
 }
 function padSheet(){
-  const s=ui.sel, c=curCard(), p=c.players[s.side][s.slot], v=p.boxes[s.box];
-  const nav=`<div class="navrow"><button data-a="prev" aria-label="Previous box">‹ Back</button>
+  const s=ui.sel, c=curCard(), p=c.players[s.side][s.slot];
+  const evening=!!s.total;
+  const v=evening?(playerHasEveningTotal(p)?Math.floor(Number(p.total)):null):p.boxes[s.box];
+  const where=evening
+    ? `${esc(sideName(c,s.side))} · Evening total`
+    : `${esc(sideName(c,s.side))} · ${rubLabel(c,s.box)}`;
+  const nav=evening
+    ? `<div class="navrow"><button data-a="prev" aria-label="Previous player">‹ Back</button>
+        <button class="next" data-a="next">Next ›</button></div>`
+    : `<div class="navrow"><button data-a="prev" aria-label="Previous box">‹ Back</button>
       ${v===9 ? `<button class="${p.spare[s.box]?'on':''}" data-a="spare" aria-pressed="${!!p.spare[s.box]}">Spare ⬡</button>`
         : `<button class="${v>9?'on':''}" disabled>${v>9?'Spare ⬡ (auto)':'Spare ⬡'}</button>`}
       ${finesEnabled(c)?`<button class="${fineCount(p,s.box)?'on':''}" data-a="fine">${fineCount(p,s.box)?`Fine ◤×${fineCount(p,s.box)}`:'Fine ◤'}</button>`:''}
       <button class="next" data-a="next">Next ›</button></div>`;
   if(ui.pcMode){
-    return `<div class="sheet pc-entry" role="dialog" aria-label="Enter score">
-      <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(sideName(c,s.side))} · ${rubLabel(c,s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
-      <p class="pc-hint">Type the score on the keyboard · Backspace clears · Enter goes Next</p>
+    return `<div class="sheet pc-entry" role="dialog" aria-label="${evening?'Enter evening total':'Enter score'}">
+      <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${where}</span></div><div class="val">${v===null?'–':v}</div></div>
+      <p class="pc-hint">Type the ${evening?'evening total':'score'} on the keyboard · Backspace clears · Enter goes Next</p>
       ${nav}
       <button class="btn quiet block" data-a="closepad" style="margin-top:10px">Done</button></div>`;
   }
   const keys=['9','8','7','6','5','4','3','2','1'].map(k=>`<button data-a="k" data-k="${k}">${k}</button>`).join('')+
     `<button data-a="kback" aria-label="Delete">⌫</button><button data-a="k" data-k="0">0</button><button data-a="closepad" style="font-size:20px">Done</button>`;
-  return `<div class="sheet" role="dialog" aria-label="Enter score">
-    <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${esc(sideName(c,s.side))} · ${rubLabel(c,s.box)}</span></div><div class="val">${v===null?'–':v}</div></div>
+  return `<div class="sheet" role="dialog" aria-label="${evening?'Enter evening total':'Enter score'}">
+    <div class="sheethead"><div class="who">${esc(p.name)}<br><span class="muted small" style="font-weight:500">${where}</span></div><div class="val">${v===null?'–':v}</div></div>
     <div class="keys">${keys}</div>
     ${nav}</div>`;
 }
@@ -2376,7 +2475,7 @@ function render(){
 }
 // Sit the selected player's row (name and boxes) directly above the keypad, clear of the score bar
 function scrollToSel(){
-  const box=$app.querySelector('.box.sel'), sheet=$app.querySelector('.sheet'); if(!box||!sheet) return;
+  const box=$app.querySelector('.box.sel, .evening-total.sel'), sheet=$app.querySelector('.sheet'); if(!box||!sheet) return;
   const row=box.closest('.prow'), strip=$app.querySelector('.strip');
   const top=(strip?strip.getBoundingClientRect().bottom:0)+8;
   const bottom=sheet.getBoundingClientRect().top-8;
@@ -2389,29 +2488,48 @@ function scrollToSel(){
 /* ---------- actions ---------- */
 function setVal(v){
   const c=curCard(), s=ui.sel;
+  if(s.total){
+    setEveningTotal(c, s.side, s.slot, v);
+    persist(c.key);
+    render();
+    return;
+  }
   const before=rubGroupsCompleteFlags(c);
   const p=c.players[s.side][s.slot]; p.boxes[s.box]=v; if(v!==9) p.spare[s.box]=false;
   persist(c.key);
   maybeQueueRubPairSync(c, before);
   render();
 }
+function selEntryString(c, sel){
+  const p=c.players[sel.side][sel.slot];
+  if(sel.total) return playerHasEveningTotal(p)?String(Math.floor(Number(p.total))):'';
+  return p.boxes[sel.box]===null?'':String(p.boxes[sel.box]);
+}
 function move(dir){
   const c=curCard(), order=activeEntryOrder(c), s=ui.sel;
-  const i=order.findIndex(o=>o.side===s.side&&o.slot===s.slot&&o.box===s.box);
+  const i=order.findIndex(o=>{
+    if(o.side!==s.side||o.slot!==s.slot) return false;
+    if(s.total||o.total) return !!(s.total&&o.total);
+    return o.box===s.box;
+  });
   const n=order[i+dir];
   if(!n){ ui.sel=null; render(); return; }
   ui.side=n.side;   // follow the entry order side (live play-order or scorecard fill-order)
   // if the next player has no name yet, ask for one
   if(!c.players[n.side][n.slot].name){ ui.sel=null; ui.sheet={side:n.side,slot:n.slot}; ui.resume=n; render(); return; }
-  ui.sel={side:n.side,slot:n.slot,box:n.box}; const p=c.players[n.side][n.slot];
-  ui.entry=p.boxes[n.box]===null?'':String(p.boxes[n.box]); ui.fresh=true; render(); scrollToSel();
+  ui.sel=n.total?{side:n.side,slot:n.slot,total:true}:{side:n.side,slot:n.slot,box:n.box};
+  ui.entry=selEntryString(c, ui.sel); ui.fresh=true; render(); scrollToSel();
 }
 function pickPlayer(name){
   const c=curCard(), {side,slot}=ui.sheet;
   c.players[side][slot].name=name; persist(c.key);
   if(c.tryout) rememberTryoutName(name);
   ui.sheet=null; ui.newName=''; ui.dupe=null;
-  if(ui.resume){ const r=ui.resume; ui.resume=null; ui.side=side; ui.sel={side,slot:r.slot,box:r.box}; ui.entry=''; ui.fresh=true; render(); scrollToSel(); }
+  if(ui.resume){
+    const r=ui.resume; ui.resume=null; ui.side=side;
+    ui.sel=r.total?{side,slot:r.slot,total:true}:{side,slot:r.slot,box:r.box};
+    ui.entry=selEntryString(c, ui.sel); ui.fresh=true; render(); scrollToSel();
+  }
   else render();
 }
 function addPlayer(name){
@@ -2555,10 +2673,15 @@ document.addEventListener('click',e=>{
     case 'back': ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null; ui.entryPickKey=null; ui.screen='fixtures'; render(); break;
     case 'side': ui.side=D.side; render(); break;
     case 'box': {
-      const c=curCard(); if(c.status==='submitted') break;
+      const c=curCard(); if(c.status==='submitted'||isScorecardMode(c)) break;
       const s={side:D.side,slot:+D.slot,box:+D.box}, p=c.players[s.side][s.slot];
       if(!p.name){ ui.sel=null; ui.sheet={side:s.side,slot:s.slot}; ui.resume={slot:s.slot,box:s.box}; render(); break; }
       ui.sel=s; ui.entry=p.boxes[s.box]===null?'':String(p.boxes[s.box]); ui.fresh=true; render(); scrollToSel(); break; }
+    case 'evening-total': {
+      const c=curCard(); if(c.status==='submitted'||!isScorecardMode(c)) break;
+      const s={side:D.side,slot:+D.slot,total:true}, p=c.players[s.side][s.slot];
+      if(!p.name){ ui.sel=null; ui.sheet={side:s.side,slot:s.slot}; ui.resume={slot:s.slot,total:true}; render(); break; }
+      ui.sel=s; ui.entry=selEntryString(c,s); ui.fresh=true; render(); scrollToSel(); break; }
     case 'pc-mode': {
       ui.pcMode=!ui.pcMode;
       if(ui.pcMode && ui.pcTheme!=='light' && ui.pcTheme!=='dark') ui.pcTheme='dark';
@@ -2572,9 +2695,13 @@ document.addEventListener('click',e=>{
     case 'next': move(1); break;
     case 'prev': move(-1); break;
     case 'closepad': ui.sel=null; render(); break;
-    case 'spare': { const c=curCard(), s=ui.sel, p=c.players[s.side][s.slot]; if(p.boxes[s.box]!==9) break; p.spare[s.box]=!p.spare[s.box]; persist(c.key); render(); scrollToSel(); break; }
+    case 'spare': {
+      const c=curCard(), s=ui.sel; if(!s||s.total) break;
+      const p=c.players[s.side][s.slot]; if(p.boxes[s.box]!==9) break;
+      p.spare[s.box]=!p.spare[s.box]; persist(c.key); render(); scrollToSel(); break; }
     case 'fine':  {
-      const c=curCard(), s=ui.sel, p=c.players[s.side][s.slot];
+      const c=curCard(), s=ui.sel; if(!s||s.total) break;
+      const p=c.players[s.side][s.slot];
       const n=fineCount(p,s.box);
       setFineCount(p, s.box, n>=FINE_CYCLE_MAX ? 0 : n+1);
       persist(c.key); render(); scrollToSel(); break; }
