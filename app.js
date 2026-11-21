@@ -514,6 +514,87 @@ function deleteQuickMatch(key){
   if(ui.cardKey===key){ ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null; ui.screen='fixtures'; }
   render();
 }
+/** Drop pending upsert/media jobs so a clear is not undone by a later flush. */
+async function dropSbJobsForCard(cardKey){
+  try{
+    const all=await idbAll('sbQueue');
+    const jobs=Object.values(all).filter(j=>j&&j.body&&j.body.p_card_key===cardKey&&j.status==='pending');
+    await Promise.all(jobs.map(j=>{
+      j.status='skipped';
+      j.lastError='card cleared';
+      return idbPut('sbQueue', j.id, j);
+    }));
+    await refreshSbPendingCount();
+  }catch(e){}
+}
+async function queueSupabaseCardDelete(cardKey){
+  if(!supabaseEnabled()) return;
+  await enqueueSbJob('delete::'+cardKey, 'delete_card', {
+    p_team_key:sessionTeamKey(),
+    p_pin:session.pin,
+    p_card_key:cardKey
+  });
+}
+/**
+ * Wipe a match card on this phone. League fixtures also queue skittles_delete_card
+ * so the row leaves Supabase / skittles_league_cards (league site /api/cards).
+ */
+async function clearMatchCard(key){
+  const c=cards[key]; if(!c) return;
+  const league=shouldCloudSync(c);
+  const label=sideName(c,'home')+' v '+sideName(c,'away');
+  const cloudNote=league
+    ? '\n\nThis also removes it from league sync so it no longer shows on the league site.'
+    : '\n\n(Not a league fixture — phone only.)';
+  if(!window.confirm('Clear this match card for '+label+'?'+cloudNote+'\n\nScores, photo, and signatures will be wiped. This cannot be undone.')) return;
+
+  await dropSbJobsForCard(key);
+
+  delete cards[key];
+  if(photoURLs[key]){ URL.revokeObjectURL(photoURLs[key]); delete photoURLs[key]; }
+  revokeSigURLs(key);
+  try{
+    await Promise.all([
+      idbDel('cards',key), idbDel('photos',key),
+      idbDel('sigs',sigStoreKey(key,'home')), idbDel('sigs',sigStoreKey(key,'away'))
+    ]);
+  }catch(e){ saveFailed(e); }
+
+  if(ui.cardKey===key || ui.entryPickKey===key){
+    ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null;
+    ui.entryPickKey=null; ui.screen='fixtures';
+  }
+
+  if(!league){
+    ui.msg='Card cleared on this phone.';
+    render();
+    return;
+  }
+  if(!supabaseEnabled()){
+    ui.msg='Card cleared on this phone. League cloud sync is off here — remove the row in Supabase if it still shows on the league site.';
+    render();
+    return;
+  }
+
+  ui.msg='Card cleared on this phone. Removing from the league…';
+  render();
+  try{
+    await queueSupabaseCardDelete(key);
+    await flushSupabaseQueue();
+    const all=await idbAll('sbQueue');
+    const del=all['delete::'+key];
+    if(del&&del.status==='sent'){
+      ui.msg='Card cleared — removed from this phone and the league.';
+    } else if(sbUi.lastErr){
+      ui.msg='Card cleared on this phone, but league remove failed ('+sbUi.lastErr+'). Run the delete-card SQL in Supabase, then try Clear again.';
+    } else {
+      ui.msg='Card cleared on this phone. League remove is waiting — open Fixtures when online to finish.';
+    }
+  }catch(e){
+    ui.msg='Card cleared on this phone, but league remove failed. Try again when online, or run the delete-card SQL.';
+  }
+  render();
+}
 function startQuickMatch(){
   if(!session){ ui.qmMsg='Log in as a team first.'; render(); return; }
   if(ui.qmSide!=='home' && ui.qmSide!=='away'){ ui.qmMsg='Choose whether you are home or away.'; render(); return; }
@@ -1171,7 +1252,8 @@ async function flushSupabaseQueue(){
           job.body.p_team_key=sessionTeamKey();
           job.body.p_pin=session.pin;
         }
-        const fn=job.kind==='upsert_media'?'skittles_upsert_media':'skittles_upsert_card';
+        const fn=job.kind==='upsert_media'?'skittles_upsert_media'
+          :(job.kind==='delete_card'?'skittles_delete_card':'skittles_upsert_card');
         await supabaseRpc(fn, job.body);
         job.status='sent';
         job.sentAt=new Date().toISOString();
@@ -2294,11 +2376,15 @@ function cardView(){
   if(locked){
     h+=`${pdfActionsHtml(c)}
         <button class="btn quiet block" data-a="edit" style="margin-top:8px">Change the card</button>
+        <button class="btn quiet block" data-a="clear-card" style="margin-top:8px">Clear this card</button>
+        <p class="muted small" style="margin:8px 0 0">Clear wipes scores on this phone${shouldCloudSync(c)?' and removes the match from the league site':''}. Use when this was a test or the wrong game.</p>
         <details style="margin-top:14px"><summary class="muted">Result data (what will go to the site)</summary><pre>${esc(JSON.stringify(exportJSON(c),null,1))}</pre></details>`;
   } else {
     h+=`<button class="btn block" data-a="submit" ${chk.blockers.length?'disabled':''}>Submit result</button>`;
     if(chk.blockers.length) h+=`<p class="muted small" style="text-align:center;margin:8px 0 0">Fix the red items to submit.</p>`;
     h+=pdfActionsHtml(c);
+    h+=`<button class="btn quiet block" data-a="clear-card" style="margin-top:12px">Clear this card</button>
+        <p class="muted small" style="margin:8px 0 0">Wipe a wrong or test game${shouldCloudSync(c)?' (also removes it from the league site)':''}.</p>`;
   }
   h+=`</section></div>`;
   return h;
@@ -2679,6 +2765,13 @@ document.addEventListener('click',e=>{
       const label=sideName(c,'home')+' v '+sideName(c,'away');
       const kind=c.tryout?'try-out game':'Quick Match';
       if(window.confirm('Delete '+kind+' '+label+' from this phone? This cannot be undone.')) deleteQuickMatch(D.key);
+      break; }
+    case 'clear-card': {
+      const c=curCard(); if(!c) break;
+      clearMatchCard(c.key).catch(err=>{
+        ui.msg=(err&&err.message)?err.message:'Could not clear the card.';
+        render();
+      });
       break; }
     case 'open': {
       const f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);

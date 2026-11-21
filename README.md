@@ -35,6 +35,21 @@ Login short names (for example `COLT`, `FARM`) are stored in seed data with each
 
 From the home (login) screen, **Start Quick game** opens a pins practice game with **no team PIN**. Choose 2–8 players a side, consecutive rubs **1** or **2** (South Molton default 2), name the sides, then the same **Score game** / **Mark scorecard** chooser. Type player names freely; recent names stay on the phone. Try-outs do **not** feed league tables or cloud sync. Use **Team login** to leave try-out mode.
 
+## Clear a wrong or test card
+
+On any open match card (draft or submitted), tap **Clear this card** at the bottom of Finish the match, then confirm.
+
+- Wipes scores, photo, and signatures **on this phone**.
+- For **league fixtures**, also calls Supabase `skittles_delete_card` so the match leaves shared sync and the league site (`skittles_league_cards` / `/api/cards`).
+- Quick Match / try-out: phone only (same as Delete on the fixtures list).
+
+Maintainer: run `supabase/migrations/20261121190000_skittles_delete_card.sql` in the Supabase SQL editor once. Until that RPC exists, Clear still wipes the phone; league remove will fail with a message until the SQL is applied. To force-remove a stuck row now:
+
+```sql
+select card_key, payload->>'status', updated_at from public.match_cards order by updated_at desc;
+delete from public.match_cards where card_key = 'DIV-WEEK-MI';  -- e.g. '0-9-0'
+```
+
 ## Score game vs Mark scorecard
 
 On a fixture (and when starting a Quick Match / Cup or Quick game try-out), scorers choose how to enter scores. **Score game** is the primary option:
