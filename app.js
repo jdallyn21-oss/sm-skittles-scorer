@@ -620,6 +620,7 @@ function exportJSON(c){
     homeName:sideName(c,'home'), awayName:sideName(c,'away'),
     homeScore:sc.home,awayScore:sc.away,homePins:sc.pins.home,awayPins:sc.pins.away,
     homeTotal:sc.home,awayTotal:sc.away,
+    notes:(c.notes&&String(c.notes).trim())||null,
     savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,
     mainSource:!!c.mainSource,
     homeCaptainSig:c.hasSigHome?'captured':null,awayCaptainSig:c.hasSigAway?'captured':null,
@@ -1299,6 +1300,15 @@ function matchPdfLines(c){
     }
     lines.push({t:' ', size:8, gap:8});
   });
+
+  const notesTxt=c.notes?String(c.notes).trim():'';
+  if(notesTxt){
+    lines.push({t:'NOTES (SPECIAL SCORES)', bold:true, size:11, gap:4});
+    notesTxt.split(/\r?\n/).forEach(line=>{
+      lines.push({t:pdfSafe(line||' '), size:9, gap:2});
+    });
+    lines.push({t:' ', size:8, gap:8});
+  }
 
   // Captured captain signatures from the app pads are drawn into these boxes
   lines.push({t:'CAPTAIN SIGNATURES', bold:true, size:11, gap:6});
@@ -2148,8 +2158,16 @@ function cardView(){
       <div class="side r ${awayLead?'lead':''}"><span class="nm">${esc(an)}</span>${awaySc}</div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
     <div class="tabs${isScorecardMode(c)?' scorecard-tabs':''}"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
-    <div class="boards${isScorecardMode(c)?' scorecard-boards':''}">${boardView(c,'home')}${boardView(c,'away')}</div>
-    <section class="card finish"><h2>Finish the match</h2>
+    <div class="boards${isScorecardMode(c)?' scorecard-boards':''}">${boardView(c,'home')}${boardView(c,'away')}</div>`;
+  // Special-score notes — always available on Mark scorecard; also show if already filled or viewing submitted
+  if(isScorecardMode(c) || (c.notes&&String(c.notes).trim()) || locked){
+    const noteVal=c.notes||'';
+    h+=`<section class="card score-notes" aria-label="Special score notes">
+      <label class="field" for="cardNotes">Notes (special scores)</label>
+      <textarea id="cardNotes" rows="3" maxlength="500" placeholder="e.g. 27s — J. Smith (home)" ${locked?'readonly':''}>${esc(noteVal)}</textarea>
+    </section>`;
+  }
+  h+=`<section class="card finish"><h2>Finish the match</h2>
       ${ui.pcMode||c.mainSource?`<button type="button" class="radio ${c.mainSource?'on':''}" data-a="main-source" ${locked?'disabled':''} aria-pressed="${c.mainSource?'true':'false'}"><span class="dot"></span><span><b>This was the main source of scoring</b><br><span class="muted small">Tick when scores were entered here on the PC/projector. Chalkboard photo is then optional.</span></span></button>`:''}
       <p class="muted small" style="margin:0">${c.mainSource?'Photo is optional because this card is marked as the main scoring source.':'Take a photo of the chalkboard so the league can check the scores.'}</p>
       ${c.hasPhoto&&photoURLs[c.key]?`<img class="photo" src="${photoURLs[c.key]}" alt="Photo of the chalkboard">`:''}
@@ -2628,7 +2646,13 @@ document.addEventListener('change',e=>{
       .catch(()=>{ ui.msg='That photo could not be saved. Check the phone has some free space, then try again.'; render(); });
   }
 });
-document.addEventListener('input',e=>{ if(e.target.id==='newName'){ ui.newName=e.target.value; if(ui.dupe){ ui.dupe=null; } } });
+document.addEventListener('input',e=>{
+  if(e.target.id==='newName'){ ui.newName=e.target.value; if(ui.dupe){ ui.dupe=null; } }
+  if(e.target.id==='cardNotes'){
+    const c=curCard(); if(!c||c.status==='submitted') return;
+    c.notes=e.target.value; persist(c.key);
+  }
+});
 document.addEventListener('focusin',e=>{
   if(e.target.id!=='tgHome' && e.target.id!=='tgAway') return;
   // Tap/click clears so Joe can type a fresh side name
