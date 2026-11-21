@@ -38,12 +38,26 @@ const FORMATS = {
   }
 };
 const FORMAT_ORDER = ['league','western-counties','sid-squire','pidler','front-pin','concrete'];
+function tryoutPairSize(c){
+  if(c && (c.rubs===1 || c.rubs===2)) return c.rubs;
+  return 2; // South Molton default
+}
 function cardFormat(c){
+  if(c && c.tryout){
+    const slots=Math.max(2, Math.min(8, Number(c.slots)||6));
+    const pair=tryoutPairSize(c);
+    return {
+      id:'tryout', name:'Quick game', short:'Quick game',
+      slots, rubs:6, scoring:'pins', pairRubs:pair===2, maxScore:null,
+      summary:slots+' a side · 6 rubs · '+(pair===2?'double rubs':'single rubs')
+    };
+  }
   if(c && c.format && FORMATS[c.format]) return FORMATS[c.format];
   return FORMATS.league;
 }
 function formatUsesPairRubs(c){
   const fmt=cardFormat(c);
+  if(fmt.id==='tryout') return tryoutPairSize(c)===2;
   if(fmt.id==='league') return settings.rubs===2;
   return !!fmt.pairRubs;
 }
@@ -119,9 +133,10 @@ function finesEnabled(c){
   return !!settings.fines;
 }
 let settings = { rubs:2, fines:true };
-let session  = null;      // {div,num,pin,teamKey}
+let session  = null;      // {div,num,pin,teamKey} or {tryout:true}
 let cards    = {};        // by fixture key
 let extra    = {};        // players added on the phone
+let tryoutNames = [];     // recent free-typed names for Quick game try-outs (IndexedDB)
 const photoURLs = {};     // object URLs for the stored chalkboard photos
 const sigURLs = {};       // cardKey -> {home?, away?} object URLs for captain signatures
 let syncMeta = {day:'', count:0}; // daily league POST budget tracker
@@ -133,7 +148,9 @@ const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, reorderSel:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
              leagueTab:'table', leagueDiv:null, leagueStatsLoading:false, leagueStatsErr:'', leagueStats:null, leagueStatsSource:'',
-             pcMode:false, pcTheme:'dark' };
+             pcMode:false, pcTheme:'dark',
+             entryPickKey:null,
+             tgSlots:6, tgRubs:2, tgHome:'Home', tgAway:'Away', tgMsg:'' };
 function applyPcChrome(){
   document.body.classList.toggle('pc-mode', !!ui.pcMode);
   if(ui.pcMode) document.documentElement.setAttribute('data-theme', ui.pcTheme==='light'?'light':'dark');
@@ -194,6 +211,31 @@ function rosterFor(d,n){
   all.forEach(x=>{ if(!seen.has(norm(x))){ seen.add(norm(x)); out.push(x); } });
   return out.sort((a,b)=> surname(a).localeCompare(surname(b)) || a.localeCompare(b));
 }
+function rememberTryoutName(name){
+  const clean=String(name||'').trim().replace(/\s+/g,' ');
+  if(clean.length<2) return;
+  const seen=norm(clean);
+  tryoutNames=[clean, ...tryoutNames.filter(n=>norm(n)!==seen)].slice(0,40);
+  kvSave('tryoutNames', tryoutNames);
+}
+function tryoutRosterList(){
+  const seen=new Set(), out=[];
+  tryoutNames.forEach(x=>{
+    const n=String(x||'').trim();
+    if(!n || seen.has(norm(n))) return;
+    seen.add(norm(n)); out.push(n);
+  });
+  return out;
+}
+function rosterForSide(c,side){
+  if(c && c.tryout) return tryoutRosterList();
+  const meta=sideMeta(c,side);
+  return rosterFor(meta.div, meta.num);
+}
+function isTryoutSession(){ return !!(session && session.tryout); }
+/** League fixtures only — Quick Matches, cups, and try-outs never leave the phone. */
+function feedsLeagueTables(c){ return !!(c && !c.quick && !c.tryout); }
+function shouldCloudSync(c){ return feedsLeagueTables(c); }
 
 /* ---------- fixtures ---------- */
 function fixturesFor(d,n){
@@ -262,11 +304,18 @@ function venueOf(d,homeNum){ const i=SEED.info[d][homeNum-1]; return i? i.venue+
 function teamKey(d,n){ return d+'-'+n; }
 function parseTeamKey(k){ const [d,n]=String(k).split('-').map(Number); return {div:d,num:n}; }
 function sideMeta(c,side){
+  if(c.tryout) return {div:null, num:null, tryout:true, label:side==='home'?(c.homeName||'Home'):(c.awayName||'Away')};
   if(c.quick) return side==='home' ? {div:c.homeDiv,num:c.home} : {div:c.awayDiv,num:c.away};
   return {div:c.div, num:side==='home'?c.home:c.away};
 }
-function sideName(c,side){ const t=sideMeta(c,side); return teamName(t.div,t.num); }
-function sideRosterKey(c,side){ const t=sideMeta(c,side); return teamKey(t.div,t.num); }
+function sideName(c,side){
+  if(c.tryout) return side==='home'?(c.homeName||'Home'):(c.awayName||'Away');
+  const t=sideMeta(c,side); return teamName(t.div,t.num);
+}
+function sideRosterKey(c,side){
+  if(c.tryout) return 'tryout';
+  const t=sideMeta(c,side); return teamKey(t.div,t.num);
+}
 function teamOptionsHtml(selected, skipKey){
   let opts='<option value="">Choose a team…</option>';
   SEED.teams.forEach((div,d)=>{
@@ -280,9 +329,14 @@ function teamOptionsHtml(selected, skipKey){
 }
 function quickMatchesFor(d,n){
   return Object.keys(cards).filter(k=>{
-    const c=cards[k]; if(!c||!c.quick) return false;
+    const c=cards[k]; if(!c||!c.quick||c.tryout) return false;
     const me=teamKey(d,n);
     return sideRosterKey(c,'home')===me || sideRosterKey(c,'away')===me;
+  }).map(k=>cards[k]).sort((a,b)=>(b.date||'').localeCompare(a.date||'') || (b.key>a.key?1:-1));
+}
+function tryoutGamesList(){
+  return Object.keys(cards).filter(k=>{
+    const c=cards[k]; return !!(c && c.tryout);
   }).map(k=>cards[k]).sort((a,b)=>(b.date||'').localeCompare(a.date||'') || (b.key>a.key?1:-1));
 }
 
@@ -347,13 +401,68 @@ function ensureCard(f){
   }
   return cards[f.key];
 }
-function openCard(key){
+function isScorecardMode(c){
+  return !!(c && c.entryMode==='scorecard');
+}
+function cardHasAnyScores(c){
+  if(!c||!c.players) return false;
+  return ['home','away'].some(side=>(c.players[side]||[]).some(p=>p && p.boxes && p.boxes.some(v=>v!==null)));
+}
+function cardNeedsEntryPick(c){
+  if(!c) return true;
+  if(c.status==='submitted') return false;
+  if(c.entryMode==='live' || c.entryMode==='scorecard') return false;
+  // Legacy cards already being filled keep the live path without an extra chooser.
+  if(cardHasAnyScores(c)) return false;
+  return true;
+}
+function showEntryPick(key){
+  ui.entryPickKey=key; ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null;
+  ui.screen='entry-pick'; render(); window.scrollTo(0,0);
+}
+function openCard(key, mode){
   const c=cards[key]; if(!c) return;
+  if(mode==='live' || mode==='scorecard'){
+    if(c.entryMode!==mode){ c.entryMode=mode; persist(key); }
+  } else if(!c.entryMode && cardHasAnyScores(c)){
+    c.entryMode='live'; persist(key);
+  }
+  ui.entryPickKey=null;
   ui.cardKey=key; ui.side=startSide(c); ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null;
   ui.screen='card'; render(); window.scrollTo(0,0);
 }
+/** Open a fixture/card: chooser when mode is unset; otherwise go straight in. */
+function beginOpenCard(key){
+  const c=cards[key]; if(!c) return;
+  if(cardNeedsEntryPick(c)){ showEntryPick(key); return; }
+  openCard(key);
+}
+function startTryoutGame(){
+  const slots=Math.max(2, Math.min(8, Number(ui.tgSlots)||6));
+  const pairRubs=(ui.tgRubs===1)?1:2;
+  const homeName=(ui.tgHome||'Home').trim()||'Home';
+  const awayName=(ui.tgAway||'Away').trim()||'Away';
+  if(norm(homeName)===norm(awayName)){ ui.tgMsg='Give home and away different names.'; render(); return; }
+  const key='tg-'+Date.now();
+  const fmt={slots, rubs:6};
+  cards[key]={
+    key, tryout:true, quick:true, slots,
+    rubs:pairRubs, // 1 = single rubs, 2 = consecutive/double (same meaning as settings.rubs)
+    homeName, awayName,
+    div:0, week:0, mi:0, date:todayISO(), home:0, away:0,
+    format:'tryout',
+    players:{home:blankSide(fmt), away:blankSide(fmt)},
+    hasPhoto:false, hasSigHome:false, hasSigAway:false,
+    fines:!!settings.fines,
+    mainSource:true, // try-out: chalkboard photo optional
+    status:'draft', savedAt:null, submittedAt:null, by:null
+  };
+  ui.tgMsg='';
+  persist(key);
+  showEntryPick(key);
+}
 function deleteQuickMatch(key){
-  const c=cards[key]; if(!c||!c.quick) return;
+  const c=cards[key]; if(!c||!(c.quick||c.tryout)) return;
   delete cards[key];
   if(photoURLs[key]){ URL.revokeObjectURL(photoURLs[key]); delete photoURLs[key]; }
   revokeSigURLs(key);
@@ -375,7 +484,7 @@ function startQuickMatch(){
   const home=ui.qmSide==='home'?me:opp, away=ui.qmSide==='home'?opp:me;
   const key='qm-'+Date.now();
   ensureCard({key,div:home.div,week:0,mi:0,date:todayISO(),home:home.num,away:away.num,quick:true,homeDiv:home.div,awayDiv:away.div,format:fmt.id});
-  ui.qmMsg=''; openCard(key);
+  ui.qmMsg=''; showEntryPick(key);
 }
 function persist(key){
   if(key && cards[key]){
@@ -453,8 +562,21 @@ function entryOrder(c){
   }));
   return out;
 }
+/** After-play / paper-card order: fill each player's rubs left-to-right, home then away. */
+function scorecardEntryOrder(c){
+  const fmt=cardFormat(c), out=[];
+  ['home','away'].forEach(side=>{
+    for(let slot=0;slot<fmt.slots;slot++){
+      for(let box=0;box<fmt.rubs;box++) out.push({side,slot,box});
+    }
+  });
+  return out;
+}
+function activeEntryOrder(c){
+  return isScorecardMode(c) ? scorecardEntryOrder(c) : entryOrder(c);
+}
 function startSide(c){
-  const o=entryOrder(c).find(x=>{ const p=c.players[x.side][x.slot]; return p.name && p.boxes[x.box]===null; });
+  const o=activeEntryOrder(c).find(x=>{ const p=c.players[x.side][x.slot]; return p.name && p.boxes[x.box]===null; });
   return o?o.side:'home';
 }
 
@@ -490,8 +612,12 @@ function checkCard(c){
 function exportJSON(c){
   const mk=side=>c.players[side].filter(p=>p.name).map(p=>({name:p.name,pins:pinsOf(p),boxes:p.boxes.slice(),spares:p.boxes.map((v,i)=>isSpare(p,i)?i+1:0).filter(Boolean)}));
   const home=sideMeta(c,'home'), away=sideMeta(c,'away'), fmt=cardFormat(c), sc=matchScore(c);
-  return {key:c.quick?'quick-'+c.key:'w'+c.week+'m'+c.mi,quick:!!c.quick,format:fmt.id,formatName:fmt.name,scoring:fmt.scoring,
-    division:c.quick?null:c.div+1, homeDivision:home.div+1,awayDivision:away.div+1,homeNum:home.num,awayNum:away.num,
+  return {key:c.tryout?'tryout-'+c.key:(c.quick?'quick-'+c.key:'w'+c.week+'m'+c.mi),
+    quick:!!c.quick, tryout:!!c.tryout, format:fmt.id,formatName:fmt.name,scoring:fmt.scoring,
+    division:feedsLeagueTables(c)?c.div+1:null,
+    homeDivision:home.div!=null?home.div+1:null, awayDivision:away.div!=null?away.div+1:null,
+    homeNum:home.num!=null?home.num:null, awayNum:away.num!=null?away.num:null,
+    homeName:sideName(c,'home'), awayName:sideName(c,'away'),
     homeScore:sc.home,awayScore:sc.away,homePins:sc.pins.home,awayPins:sc.pins.away,
     homeTotal:sc.home,awayTotal:sc.away,
     savedAt:c.submittedAt,submittedBy:c.by,photo:c.hasPhoto?'attached':null,
@@ -761,7 +887,7 @@ async function enqueueLeagueSync(jobId, payload){
   flushLeagueSyncQueue();
 }
 function maybeQueueRubPairSync(c, beforeFlags){
-  if(!leagueSyncEnabled()||!c) return;
+  if(!leagueSyncEnabled()||!c||!feedsLeagueTables(c)) return;
   const after=rubGroupsCompleteFlags(c);
   after.forEach((done,i)=>{
     if(done && !(beforeFlags&&beforeFlags[i])){
@@ -771,7 +897,7 @@ function maybeQueueRubPairSync(c, beforeFlags){
   });
 }
 async function queueFinalMatchSync(c){
-  if(!leagueSyncEnabled()||!c) return;
+  if(!leagueSyncEnabled()||!c||!feedsLeagueTables(c)) return;
   return enqueueLeagueSync(c.key+'::final', exportFinalPayload(c));
 }
 async function postLeagueCard(payload){
@@ -806,6 +932,14 @@ async function flushLeagueSyncQueue(){
       if(syncMeta.count>=LEAGUE_DAILY_CAP){
         syncUi.lastErr='Daily sync cap ('+LEAGUE_DAILY_CAP+') reached — waiting until tomorrow.';
         break;
+      }
+      const p=job.payload||{};
+      const localKey=p.localKey||p.key||'';
+      if(p.quick || p.tryout || /^(qm-|quick-|tg-|tryout-)/i.test(String(localKey))){
+        job.status='skipped';
+        job.lastError='quick/tryout excluded from league sync';
+        await idbPut('syncQueue', job.id, job);
+        continue;
       }
       try{
         job.attempts=(job.attempts||0)+1;
@@ -909,7 +1043,7 @@ async function enqueueSbJob(id, kind, body){
 }
 async function queueSupabaseCardUpsert(cardKey){
   if(!supabaseEnabled()) return;
-  const c=cards[cardKey]; if(!c) return;
+  const c=cards[cardKey]; if(!shouldCloudSync(c)) return;
   const parts=cardParticipantKeys(c);
   const payload=Object.assign({}, c, {cloudDirty:undefined});
   delete payload.cloudDirty;
@@ -924,6 +1058,7 @@ async function queueSupabaseCardUpsert(cardKey){
 }
 async function queueSupabaseMedia(cardKey, kind, blob){
   if(!supabaseEnabled()||!blob) return;
+  if(!shouldCloudSync(cards[cardKey])) return;
   const b64=await blobToBase64(blob);
   await enqueueSbJob('media::'+cardKey+'::'+kind, 'upsert_media', {
     p_team_key:sessionTeamKey(),
@@ -944,6 +1079,15 @@ async function flushSupabaseQueue(){
       .sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
     for(const job of pending){
       try{
+        // Drop any queued Quick Match / try-out jobs — they must never leave the phone
+        const ck=job.body&&job.body.p_card_key;
+        const card=ck?cards[ck]:null;
+        if((card && !shouldCloudSync(card)) || (ck && /^(qm-|quick-|tg-)/i.test(String(ck)))){
+          job.status='skipped';
+          job.lastError='quick/tryout excluded from cloud sync';
+          await idbPut('sbQueue', job.id, job);
+          continue;
+        }
         job.attempts=(job.attempts||0)+1;
         // refresh PIN fields from current session
         if(job.body){
@@ -1120,9 +1264,11 @@ function matchPdfLines(c){
   else lines.push({t:pdfSafe((sc.home>sc.away?hn:an)+' win by '+Math.abs(sc.home-sc.away)+unit), bold:true, size:12, gap:6});
   if(sc.mode!=='pins') lines.push({t:'Pins  '+sc.pins.home+' - '+sc.pins.away, size:10, gap:6});
 
-  const kind=c.quick?(fmt.id==='league'?'Quick Match':fmt.name+' cup'):('Week '+c.week);
+  const kind=c.tryout
+    ? ('Quick game try-out · '+fmt.slots+' a side')
+    : (c.quick?(fmt.id==='league'?'Quick Match':fmt.name+' cup'):('Week '+c.week));
   lines.push({t:pdfSafe(kind)+'  |  '+pdfSafe(fmtDate(c.date)), size:10, gap:2});
-  const ven=venueOf(home.div,home.num);
+  const ven=c.tryout?'Try-out (not a league fixture)':venueOf(home.div,home.num);
   if(ven) lines.push({t:pdfSafe(ven), size:9, gap:2});
   if(c.status==='submitted' && c.submittedAt){
     lines.push({t:'Submitted '+pdfSafe(new Date(c.submittedAt).toLocaleString('en-GB'))+(c.by?' by '+pdfSafe(c.by):''), size:9, gap:10});
@@ -1577,6 +1723,10 @@ function loginView(){
     `<button data-a="pinback" aria-label="Delete">⌫</button><button data-a="pin" data-k="0">0</button><span></span>`;
   return `<div class="wrap">
     ${installCard()}
+    <div class="card">
+      <b>Quick game</b>
+      <button class="btn block" data-a="tryout" style="margin-top:12px">Start Quick game</button>
+    </div>
     ${supabaseConfigured()?'<div class="banner demo">After login, cards can sync across phones when the league organiser has cloud sync switched on.</div>':''}
     <h2>Log in to score</h2>
     <p class="muted">Pick your team, then enter your 4-digit team PIN.</p>
@@ -1608,6 +1758,14 @@ function settingsView(){
 }
 function sessionTopNav(active){
   if(!session) return '';
+  if(session.tryout){
+    return `<div class="session-top">
+      <div class="session-top-team"><h2 style="margin:0">Quick game try-out</h2><span class="muted small">Not a league fixture — stays on this phone</span></div>
+      <div class="session-top-nav" role="navigation" aria-label="Account">
+        <button type="button" class="back" data-a="tryout-end">Team login</button>
+      </div>
+    </div>`;
+  }
   const {div:d,num:n}=session;
   const onStats=active==='league-stats';
   return `<div class="session-top">
@@ -1618,7 +1776,50 @@ function sessionTopNav(active){
     </div>
   </div>`;
 }
+function tryoutHubView(){
+  const list=tryoutGamesList();
+  const slots=Math.max(2, Math.min(8, Number(ui.tgSlots)||6));
+  const pairRubs=(ui.tgRubs===1)?1:2;
+  const slotBtns=[2,3,4,5,6,7,8].map(n=>
+    `<button type="button" class="slot-pick ${slots===n?'on':''}" data-a="tg-slots" data-n="${n}" aria-pressed="${slots===n?'true':'false'}">${n}</button>`
+  ).join('');
+  const rubBtns=[1,2].map(n=>
+    `<button type="button" class="slot-pick ${pairRubs===n?'on':''}" data-a="tg-rubs" data-n="${n}" aria-pressed="${pairRubs===n?'true':'false'}">${n}</button>`
+  ).join('');
+  let h=`<div class="wrap">${sessionTopNav('fixtures')}`;
+  if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
+  h+=`<div class="card hero">
+    <b>Quick game</b>
+    <p class="field" style="margin:12px 0 8px">Players a side</p>
+    <div class="slot-pick-row" role="group" aria-label="Players a side">${slotBtns}</div>
+    <p class="field" style="margin-bottom:8px">Consecutive rubs</p>
+    <div class="slot-pick-row" role="group" aria-label="Consecutive rubs">${rubBtns}</div>
+    <label class="field" for="tgHome">Home name</label>
+    <input type="text" id="tgHome" value="${esc(ui.tgHome||'Home')}" autocomplete="off" autocapitalize="words" maxlength="40">
+    <label class="field" for="tgAway">Away name</label>
+    <input type="text" id="tgAway" value="${esc(ui.tgAway||'Away')}" autocomplete="off" autocapitalize="words" maxlength="40">
+    <div class="err" role="alert" style="margin-top:10px">${esc(ui.tgMsg)}</div>
+    <button class="btn block" data-a="tryout-start" style="margin-top:8px">Start Quick game</button>
+  </div>`;
+  if(list.length){
+    h+=`<div class="card"><b>Your try-out games</b>`;
+    list.forEach(c=>{
+      const home=sideName(c,'home'), away=sideName(c,'away'), fmt=cardFormat(c);
+      const pair=tryoutPairSize(c);
+      let st='<span class="muted">Not started</span>';
+      if(c.status==='submitted') st='<span class="state-wait">Finished on this phone</span>';
+      else if(c.players.home.some(p=>p.name||p.boxes.some(v=>v!==null))||c.players.away.some(p=>p.name||p.boxes.some(v=>v!==null))) st='<span class="state-wait">In progress</span>';
+      h+=`<div class="qm-row">
+        <button class="frow qm-open" data-a="open-quick" data-key="${esc(c.key)}"><span><b>${fmtDate(c.date)}</b> · ${fmt.slots} a side · rubs ${pair}<br><span class="muted small">${esc(home)} v ${esc(away)}</span></span>${st}</button>
+        <button class="qm-del" data-a="delete-quick" data-key="${esc(c.key)}" aria-label="Delete try-out ${esc(home)} versus ${esc(away)}">Delete</button>
+      </div>`;
+    });
+    h+='</div>';
+  }
+  return h+'</div>';
+}
 function fixturesView(){
+  if(isTryoutSession()) return tryoutHubView();
   const {div:d,num:n}=session, list=fixturesFor(d,n), nx=nextFixture(list), qms=quickMatchesFor(d,n);
   let h=`<div class="wrap">${sessionTopNav('fixtures')}`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
@@ -1644,12 +1845,25 @@ function fixturesView(){
   if(nx){
     const c=cards[nx.key], home=nx.home===n;
     const opp=teamName(d,home?nx.away:nx.home);
-    const label=!c?'Start scoring':c.status==='submitted'?'View or change the card':'Carry on scoring';
+    const needsPick=!c || cardNeedsEntryPick(c);
     h+=`<div class="card hero"><div class="when">Next match · ${fmtDate(nx.date)} · Week ${nx.week}</div>
       <div class="vs">${esc(teamName(d,nx.home))} v ${esc(teamName(d,nx.away))}</div>
       <div><span class="tag">${home?'You are home':'You are away'}</span><span class="muted small">${esc(venueOf(d,nx.home))}</span></div>
-      <p class="muted small" style="margin:10px 0 14px">${home?'As the home team, you score this one. ':'The home team scores this one, but you can score it if they can\'t. '}Either team can make changes.</p>
-      <button class="btn block" data-a="open" data-key="${nx.key}">${label}</button></div>`;
+      <p class="muted small" style="margin:10px 0 14px">${home?'As the home team, you score this one. ':'The home team scores this one, but you can score it if they can\'t. '}Either team can make changes.</p>`;
+    if(c && c.status==='submitted'){
+      h+=`<button class="btn block" data-a="open" data-key="${nx.key}">View or change the card</button>`;
+    } else if(needsPick){
+      h+=`<div class="entry-pick-actions">
+        <button class="btn block" data-a="open-mode" data-key="${nx.key}" data-mode="scorecard">Mark scorecard</button>
+        <p class="muted small entry-pick-hint">Fill the card after the match — like paper.</p>
+        <button class="btn quiet block" data-a="open-mode" data-key="${nx.key}" data-mode="live">Score game</button>
+        <p class="muted small entry-pick-hint">Score live as you go, rub by rub.</p>
+      </div>`;
+    } else {
+      const modeLabel=isScorecardMode(c)?'Carry on marking scorecard':'Carry on scoring';
+      h+=`<button class="btn block" data-a="open" data-key="${nx.key}">${modeLabel}</button>`;
+    }
+    h+='</div>';
   }
   h+=`<div class="card"><b>All fixtures</b>`;
   list.forEach(f=>{
@@ -1667,6 +1881,30 @@ function fixturesView(){
   return h+'</div></div>';
 }
 
+function entryPickView(){
+  const key=ui.entryPickKey, c=key?cards[key]:null;
+  if(!c) return `<div class="wrap"><button class="back" data-a="back">‹ Fixtures</button><p class="muted">That match is not on this phone.</p></div>`;
+  const fmt=cardFormat(c);
+  const hn=sideName(c,'home'), an=sideName(c,'away');
+  const title=c.tryout
+    ? `Quick game · ${fmtDate(c.date)} · ${fmt.slots} a side`
+    : (c.quick
+      ? (fmt.id==='league' ? `Quick Match · ${fmtDate(c.date)}` : `${fmt.name} cup · ${fmtDate(c.date)}`)
+      : `Week ${c.week} · ${fmtDate(c.date)}`);
+  const backLabel=isTryoutSession()?'‹ Quick games':'‹ Fixtures';
+  return `<div class="wrap">
+    <button class="back" data-a="back">${backLabel}</button>
+    <h2 style="margin-top:16px">${esc(title)}</h2>
+    <p class="entry-pick-vs">${esc(hn)} v ${esc(an)}</p>
+    <p class="muted" style="margin:0 0 16px">How do you want to enter the scores?</p>
+    <div class="card entry-pick-card">
+      <button class="btn block" data-a="pick-mode" data-mode="scorecard">Mark scorecard</button>
+      <p class="muted small entry-pick-hint">Fill every box after play — like a paper card — then finish and submit as usual.</p>
+      <button class="btn quiet block" data-a="pick-mode" data-mode="live" style="margin-top:14px">Score game</button>
+      <p class="muted small entry-pick-hint">Score live as you go, rub by rub while they play.</p>
+    </div>
+  </div>`;
+}
 function quickView(){
   if(!session) return `<div class="wrap"><button class="back" data-a="back">‹ Fixtures</button><p class="muted">Log in first.</p></div>`;
   const meName=teamName(session.div,session.num);
@@ -1825,7 +2063,7 @@ function boardView(c,side){
   if(ui.reorder===side && c.status!=='submitted') return reorderView(c,side);
   const list=c.players[side], meta=sideMeta(c,side), locked=c.status==='submitted', fmt=cardFormat(c);
   const ct=colTotals(c,list), ups=pinsUp(c,list), tot=teamPins(list);
-  const last=(SEED.lineups[teamKey(meta.div,meta.num)]||[]);
+  const last=c.tryout?[]:((SEED.lineups[teamKey(meta.div,meta.num)]||[]));
   const grid=`grid-template-columns:repeat(${fmt.rubs},minmax(0,1fr))`;
   const canReorder=!locked && list.filter(p=>p.name).length>1;
   const playOn=sidePlayStarted(list) || sidePlayStarted(c.players.home) || sidePlayStarted(c.players.away);
@@ -1833,8 +2071,9 @@ function boardView(c,side){
     ? `<button type="button" class="lineup-compact" data-a="reorder" data-side="${side}" title="Change the line up">Line up</button>`
     : '';
   let h=`<section class="board ${ui.side===side?'on':''}"><div class="btitle"><span class="chalkhead">${side==='home'?'Home':'Away'}</span><span class="tname">${esc(sideName(c,side))}${reorderCompact}</span></div>`;
-  if(!locked && list.every(p=>!p.name) && last.length) h+=`<button class="btn chalk" data-a="lineup" data-side="${side}">Use last match's line-up</button>`;
+  if(!locked && !c.tryout && list.every(p=>!p.name) && last.length) h+=`<button class="btn chalk" data-a="lineup" data-side="${side}">Use last match's line-up</button>`;
   if(canReorder && !playOn) h+=`<button class="btn chalk lineup-pre" data-a="reorder" data-side="${side}">Change the line up</button>`;
+  if(!locked && c.tryout && list.every(p=>!p.name)) h+=`<p class="muted small" style="margin:0 0 8px;color:var(--chalk-dim)">Tap a player slot and type names — recent names stay on this phone.</p>`;
   list.forEach((p,slot)=>{
     const fullAbove=p.name
       ? `<button class="pname full-only" ${locked?'disabled':''} data-a="name" data-side="${side}" data-slot="${slot}"><span class="full">${esc(p.name)}</span></button>`
@@ -1871,20 +2110,31 @@ function cardView(){
   if(sc.mode!=='pins' && (sc.pins.home||sc.pins.away)) msg+=' · pins '+sc.pins.home+'–'+sc.pins.away;
   const locked=c.status==='submitted';
   const chk=checkCard(c);
-  const venue=venueOf(home.div,home.num)||'Venue not set';
-  const title=c.quick
-    ? (fmt.id==='league' ? `Quick Match · ${fmtDate(c.date)}` : `${fmt.name} cup · ${fmtDate(c.date)}`)
-    : `Week ${c.week} · ${fmtDate(c.date)}`;
+  const venue=c.tryout?'Try-out (not league)':(venueOf(home.div,home.num)||'Venue not set');
+  const title=c.tryout
+    ? `Quick game · ${fmtDate(c.date)} · ${fmt.slots} a side`
+    : (c.quick
+      ? (fmt.id==='league' ? `Quick Match · ${fmtDate(c.date)}` : `${fmt.name} cup · ${fmtDate(c.date)}`)
+      : `Week ${c.week} · ${fmtDate(c.date)}`);
   const titleWithVenue=`${title} · ${venue}`;
+  const backLabel=isTryoutSession()?'‹ Quick games':'‹ Fixtures';
   const finesOn=finesEnabled(c);
   const finesToggle=locked?'':`<button type="button" class="fines-toggle ${finesOn?'on':'off'}" data-a="card-fines" title="When on, the score pad shows a Fine button. Marks do not change the score." aria-pressed="${finesOn?'true':'false'}"><i class="fines-light" aria-hidden="true"></i><span>Mark fines</span></button>`;
   let h=`<div class="wrap wide">
-    <div class="cardhead"><button class="back" data-a="back">‹ Fixtures</button>
+    <div class="cardhead"><button class="back" data-a="back">${backLabel}</button>
       <div class="cardhead-mid"><b>${esc(titleWithVenue)}</b><br><span class="muted small">${esc(fmt.summary)}</span></div>
       <div class="cardhead-right">${finesToggle}<div class="saved">${c.savedAt?'Saved on this phone ✓ '+c.savedAt:'Not saved yet'}</div></div></div>`;
   if(ui.msg) h+=`<div class="banner bad" role="alert">${esc(ui.msg)}</div>`;
   if(ui.updateReady) h+=`<div class="banner ok">A new version of the app is ready.<button class="btn block" data-a="update" style="margin-top:10px">Update the app</button></div>`;
   if(locked) h+=`<div class="banner ok">Submitted at ${esc(new Date(c.submittedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}))}. Saved on this phone only for now — nothing is emailed or uploaded to a league server yet. Use Share / Download PDF to send the result. Tap "Change the card" if something needs correcting.</div>`;
+  if(!locked && isScorecardMode(c)){
+    h+=`<div class="banner demo" role="status">Marking scorecard — tap any box to enter scores. Set the line up before or as you fill. Finish, signatures, and submit work the same as live scoring.</div>`;
+  }
+  if(!locked && !cardHasAnyScores(c) && (c.entryMode==='live'||c.entryMode==='scorecard')){
+    const other=isScorecardMode(c)?'live':'scorecard';
+    const otherLabel=other==='scorecard'?'Mark scorecard':'Score game';
+    h+=`<p class="muted small" style="margin:0 0 12px">Wrong choice? <button type="button" class="linkbtn" data-a="switch-mode" data-mode="${other}" style="padding-left:0">${esc(otherLabel)} instead</button></p>`;
+  }
   const leadBy=Math.abs(th-ta);
   const homeLead=th>ta, awayLead=ta>th;
   const homeSc=homeLead
@@ -1897,8 +2147,8 @@ function cardView(){
       <div class="side ${homeLead?'lead':''}"><span class="nm">${esc(hn)}</span>${homeSc}</div><span class="dash">–</span>
       <div class="side r ${awayLead?'lead':''}"><span class="nm">${esc(an)}</span>${awaySc}</div></div>
       <div class="msg">${esc(msg)}${sc.max?` · max ${sc.max}`:''}${leagueSyncEnabled()&&syncUi.pending?` · ${syncUi.pending} sync waiting`:''}</div></div>
-    <div class="tabs"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
-    <div class="boards">${boardView(c,'home')}${boardView(c,'away')}</div>
+    <div class="tabs${isScorecardMode(c)?' scorecard-tabs':''}"><button class="${ui.side==='home'?'on':''}" data-a="side" data-side="home">Home · ${esc(hn)}</button><button class="${ui.side==='away'?'on':''}" data-a="side" data-side="away">Away · ${esc(an)}</button></div>
+    <div class="boards${isScorecardMode(c)?' scorecard-boards':''}">${boardView(c,'home')}${boardView(c,'away')}</div>
     <section class="card finish"><h2>Finish the match</h2>
       ${ui.pcMode||c.mainSource?`<button type="button" class="radio ${c.mainSource?'on':''}" data-a="main-source" ${locked?'disabled':''} aria-pressed="${c.mainSource?'true':'false'}"><span class="dot"></span><span><b>This was the main source of scoring</b><br><span class="muted small">Tick when scores were entered here on the PC/projector. Chalkboard photo is then optional.</span></span></button>`:''}
       <p class="muted small" style="margin:0">${c.mainSource?'Photo is optional because this card is marked as the main scoring source.':'Take a photo of the chalkboard so the league can check the scores.'}</p>
@@ -2062,15 +2312,22 @@ function padSheet(){
     ${nav}</div>`;
 }
 function rosterSheet(){
-  const {side,slot}=ui.sheet, c=curCard(), meta=sideMeta(c,side);
+  const {side,slot}=ui.sheet, c=curCard();
   const used=new Set(c.players[side].map((p,i)=>i===slot?null:norm(p.name)).filter(Boolean));
   const cur=c.players[side][slot].name;
-  const list=rosterFor(meta.div,meta.num);
+  const list=rosterForSide(c,side);
   let h=`<div class="sheet tall" role="dialog" aria-label="Choose player"><div class="sheethead"><div class="who">Player ${slot+1} · ${esc(sideName(c,side))}</div><button class="back" data-a="closesheet">Close</button></div>`;
-  h+=`<div class="rlist">`+list.map(n=>`<button data-a="pick" data-n="${esc(n)}" ${used.has(norm(n))?'disabled':''}><span>${esc(n)}</span><small>${used.has(norm(n))?'Already playing':(norm(n)===norm(cur)?'Selected':'')}</small></button>`).join('')+`</div>`;
+  if(c.tryout){
+    h+=`<p class="muted small" style="margin:0 0 8px">Type a name, or pick one you used before on this phone.</p>`;
+  }
+  if(list.length){
+    h+=`<div class="rlist">`+list.map(n=>`<button data-a="pick" data-n="${esc(n)}" ${used.has(norm(n))?'disabled':''}><span>${esc(n)}</span><small>${used.has(norm(n))?'Already playing':(norm(n)===norm(cur)?'Selected':(c.tryout?'Recent':''))}</small></button>`).join('')+`</div>`;
+  } else if(c.tryout){
+    h+=`<p class="muted small" style="margin:8px 0">No recent names yet.</p>`;
+  }
   if(cur) h+=`<button class="btn quiet block" data-a="movefromroster" style="margin-bottom:8px">Move this player to a different position</button>`;
   if(cur) h+=`<button class="btn quiet block" data-a="clearname" style="margin-bottom:12px">Take this player out</button>`;
-  h+=`<label class="field" for="newName" style="margin-top:4px">Not on the list? Add a new player</label>
+  h+=`<label class="field" for="newName" style="margin-top:4px">${c.tryout?'Player name':'Not on the list? Add a new player'}</label>
       <input type="text" id="newName" placeholder="First initial and surname, e.g. J. Smith" value="${esc(ui.newName)}" autocomplete="off" autocapitalize="words">`;
   if(ui.sheetMsg) h+=`<div class="banner bad" role="alert" style="margin-top:10px">${esc(ui.sheetMsg)}</div>`;
   if(ui.dupe){
@@ -2078,7 +2335,7 @@ function rosterSheet(){
       <button class="btn block" data-a="pick" data-n="${esc(ui.dupe.name)}">Yes, use ${esc(ui.dupe.name)}</button>
       <button class="btn quiet block" data-a="forceadd">No, add "${esc(ui.newName.trim())}" as a new player</button></div>`;
   } else {
-    h+=`<button class="btn block" data-a="addnew" style="margin-top:10px">Add player</button>`;
+    h+=`<button class="btn block" data-a="addnew" style="margin-top:10px">${c.tryout?'Use this name':'Add player'}</button>`;
   }
   return h+'</div>';
 }
@@ -2092,6 +2349,7 @@ function render(){
   else if(ui.screen==='login') h+=loginView();
   else if(ui.screen==='settings') h+=settingsView();
   else if(ui.screen==='fixtures') h+=fixturesView();
+  else if(ui.screen==='entry-pick') h+=entryPickView();
   else if(ui.screen==='quick') h+=quickView();
   else if(ui.screen==='league-stats') h+=leagueStatsView();
   else if(ui.screen==='card') h+=cardView()+(ui.sel?padSheet():'')+(ui.sheet?rosterSheet():'')+(ui.moveSheet?moveSheet():'');
@@ -2121,11 +2379,11 @@ function setVal(v){
   render();
 }
 function move(dir){
-  const c=curCard(), order=entryOrder(c), s=ui.sel;
+  const c=curCard(), order=activeEntryOrder(c), s=ui.sel;
   const i=order.findIndex(o=>o.side===s.side&&o.slot===s.slot&&o.box===s.box);
   const n=order[i+dir];
   if(!n){ ui.sel=null; render(); return; }
-  ui.side=n.side;   // play has passed to the other team: show their board
+  ui.side=n.side;   // follow the entry order side (live play-order or scorecard fill-order)
   // if the next player has no name yet, ask for one
   if(!c.players[n.side][n.slot].name){ ui.sel=null; ui.sheet={side:n.side,slot:n.slot}; ui.resume=n; render(); return; }
   ui.sel={side:n.side,slot:n.slot,box:n.box}; const p=c.players[n.side][n.slot];
@@ -2134,14 +2392,20 @@ function move(dir){
 function pickPlayer(name){
   const c=curCard(), {side,slot}=ui.sheet;
   c.players[side][slot].name=name; persist(c.key);
+  if(c.tryout) rememberTryoutName(name);
   ui.sheet=null; ui.newName=''; ui.dupe=null;
   if(ui.resume){ const r=ui.resume; ui.resume=null; ui.side=side; ui.sel={side,slot:r.slot,box:r.box}; ui.entry=''; ui.fresh=true; render(); scrollToSel(); }
   else render();
 }
 function addPlayer(name){
-  const c=curCard(), {side}=ui.sheet, k=sideRosterKey(c,side);
+  const c=curCard(), {side}=ui.sheet;
   const clean=name.trim().replace(/\s+/g,' ').split(' ').map(w=>w? w[0].toUpperCase()+w.slice(1):w).join(' ');
-  extra[k]=extra[k]||[]; extra[k].push(clean); kvSave('extraRoster',extra);
+  if(c.tryout){
+    rememberTryoutName(clean);
+  } else {
+    const k=sideRosterKey(c,side);
+    extra[k]=extra[k]||[]; extra[k].push(clean); kvSave('extraRoster',extra);
+  }
   pickPlayer(clean);
 }
 function tryLogin(){
@@ -2196,9 +2460,40 @@ document.addEventListener('click',e=>{
     case 'supabase-flush': if(!isAdminMode()) break; flushSupabaseQueue().then(()=>render()); break;
     case 'install': if(ui.installEvt){ ui.installEvt.prompt(); ui.installEvt.userChoice.finally(()=>{ ui.installEvt=null; render(); }); } break;
     case 'update': if(ui.updateReady&&ui.updateReady.waiting) ui.updateReady.waiting.postMessage('SKIP_WAITING'); break;
-    case 'logout': session=null; kvSave('session',null); sbUi.ready=false; sbUi.setupNeeded=false; sbUi.lastErr=null; ui.screen='login'; ui.teamSel=''; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; ui.leagueTab='table'; ui.leagueDiv=null; ui.leagueStats=null; ui.leagueStatsErr=''; ui.leagueStatsSource=''; render(); break;
-    case 'quick': ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
+    case 'logout': session=null; kvSave('session',null); sbUi.ready=false; sbUi.setupNeeded=false; sbUi.lastErr=null; ui.screen='login'; ui.teamSel=''; ui.entryPickKey=null; ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat='league'; ui.tgSlots=6; ui.tgRubs=2; ui.tgHome='Home'; ui.tgAway='Away'; ui.tgMsg=''; ui.leagueTab='table'; ui.leagueDiv=null; ui.leagueStats=null; ui.leagueStatsErr=''; ui.leagueStatsSource=''; render(); break;
+    case 'tryout':
+      session={tryout:true};
+      kvSave('session',session); requestPersist();
+      ui.pin=''; ui.pinMsg=''; ui.tgSlots=Math.max(2, Math.min(8, Number(ui.tgSlots)||6));
+      ui.tgRubs=(ui.tgRubs===1)?1:2;
+      ui.tgHome=ui.tgHome||'Home'; ui.tgAway=ui.tgAway||'Away'; ui.tgMsg='';
+      ui.entryPickKey=null; ui.cardKey=null; ui.screen='fixtures';
+      render(); window.scrollTo(0,0); break;
+    case 'tryout-end':
+      session=null; kvSave('session',null);
+      ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null; ui.entryPickKey=null; ui.cardKey=null;
+      ui.tgMsg=''; ui.screen='login'; render(); window.scrollTo(0,0); break;
+    case 'tg-slots': {
+      const n=+D.n;
+      if(n>=2 && n<=8){ ui.tgSlots=n; ui.tgMsg=''; render(); }
+      break; }
+    case 'tg-rubs': {
+      const n=+D.n;
+      if(n===1 || n===2){ ui.tgRubs=n; ui.tgMsg=''; render(); }
+      break; }
+    case 'tryout-start': {
+      if(!isTryoutSession()) break;
+      const homeEl=document.getElementById('tgHome');
+      const awayEl=document.getElementById('tgAway');
+      if(homeEl) ui.tgHome=homeEl.value;
+      if(awayEl) ui.tgAway=awayEl.value;
+      startTryoutGame();
+      break; }
+    case 'quick':
+      if(isTryoutSession()) break;
+      ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
     case 'league-stats':
+      if(isTryoutSession()) break;
       ui.screen='league-stats';
       ui.leagueTab=(ui.leagueTab==='results'||ui.leagueTab==='averages')?ui.leagueTab:'table';
       if(ui.leagueDiv==null && session) ui.leagueDiv=session.div;
@@ -2218,18 +2513,32 @@ document.addEventListener('click',e=>{
       const next=String(D.side||'').toLowerCase()==='away'?'away':'home';
       ui.qmSide=next; ui.qmMsg=''; render(); break; }
     case 'quick-start': startQuickMatch(); break;
-    case 'open-quick': openCard(D.key); break;
+    case 'open-quick': beginOpenCard(D.key); break;
     case 'delete-quick': {
       const c=cards[D.key];
-      if(!c||!c.quick) break;
+      if(!c||!(c.quick||c.tryout)) break;
       const label=sideName(c,'home')+' v '+sideName(c,'away');
-      if(window.confirm('Delete Quick Match '+label+' from this phone? This cannot be undone.')) deleteQuickMatch(D.key);
+      const kind=c.tryout?'try-out game':'Quick Match';
+      if(window.confirm('Delete '+kind+' '+label+' from this phone? This cannot be undone.')) deleteQuickMatch(D.key);
       break; }
     case 'open': {
       const f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);
       if(!f||f.bye) break;
-      ensureCard(f); openCard(D.key); break; }
-    case 'back': ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null; ui.screen='fixtures'; render(); break;
+      ensureCard(f); beginOpenCard(D.key); break; }
+    case 'open-mode': {
+      const f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);
+      if(!f||f.bye) break;
+      const mode=D.mode==='scorecard'?'scorecard':'live';
+      ensureCard(f); openCard(D.key, mode); break; }
+    case 'pick-mode': {
+      const key=ui.entryPickKey; if(!key||!cards[key]) break;
+      const mode=D.mode==='scorecard'?'scorecard':'live';
+      openCard(key, mode); break; }
+    case 'switch-mode': {
+      const c=curCard(); if(!c||c.status==='submitted'||cardHasAnyScores(c)) break;
+      const mode=D.mode==='scorecard'?'scorecard':'live';
+      c.entryMode=mode; persist(c.key); ui.sel=null; ui.sheet=null; render(); break; }
+    case 'back': ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null; ui.entryPickKey=null; ui.screen='fixtures'; render(); break;
     case 'side': ui.side=D.side; render(); break;
     case 'box': {
       const c=curCard(); if(c.status==='submitted') break;
@@ -2278,7 +2587,7 @@ document.addEventListener('click',e=>{
     case 'addnew': {
       const t=ui.newName.trim(); if(t.length<3){ ui.sheetMsg='Type the player\'s initial and surname first.'; render(); break; }
       ui.sheetMsg='';
-      const c=curCard(), {side}=ui.sheet, meta=sideMeta(c,side), sim=similar(t,rosterFor(meta.div,meta.num));
+      const c=curCard(), sim=similar(t, rosterForSide(c, ui.sheet.side));
       if(sim&&sim.exact){ pickPlayer(sim.name); break; }
       if(sim){ ui.dupe=sim; render(); break; }
       addPlayer(t); break; }
@@ -2288,7 +2597,9 @@ document.addEventListener('click',e=>{
       const names=(SEED.lineups[teamKey(meta.div,meta.num)]||[]).slice(0,fmt.slots);
       names.forEach((n,i)=>{ c.players[D.side][i].name=n; }); persist(c.key); render(); break; }
     case 'submit': { const c=curCard(); if(checkCard(c).blockers.length) break;
-      c.status='submitted'; c.submittedAt=new Date().toISOString(); c.by=teamName(session.div,session.num); persist(c.key);
+      c.status='submitted'; c.submittedAt=new Date().toISOString();
+      c.by=isTryoutSession()?'Quick game try-out':teamName(session.div,session.num);
+      persist(c.key);
       queueFinalMatchSync(c).catch(()=>{}); ui.sel=null; render(); window.scrollTo(0,0); break; }
     case 'league-flush': if(!isAdminMode()) break; flushLeagueSyncQueue().then(()=>render()); break;
     case 'edit': { const c=curCard(); c.status='draft'; persist(c.key); render(); break; }
@@ -2301,6 +2612,8 @@ document.addEventListener('change',e=>{
   if(e.target.id==='teamSel'){ ui.teamSel=e.target.value; ui.pinMsg=''; }
   if(e.target.id==='qmOpp'){ ui.qmOpp=e.target.value; ui.qmMsg=''; render(); }
   if(e.target.id==='qmFormat'){ ui.qmFormat=e.target.value; ui.qmMsg=''; render(); }
+  if(e.target.id==='tgHome'){ ui.tgHome=e.target.value; ui.tgMsg=''; }
+  if(e.target.id==='tgAway'){ ui.tgAway=e.target.value; ui.tgMsg=''; }
   if(e.target.id==='photoIn' && e.target.files[0]){
     const c=curCard();
     compressBlob(e.target.files[0])
@@ -2316,6 +2629,14 @@ document.addEventListener('change',e=>{
   }
 });
 document.addEventListener('input',e=>{ if(e.target.id==='newName'){ ui.newName=e.target.value; if(ui.dupe){ ui.dupe=null; } } });
+document.addEventListener('focusin',e=>{
+  if(e.target.id!=='tgHome' && e.target.id!=='tgAway') return;
+  // Tap/click clears so Joe can type a fresh side name
+  e.target.value='';
+  if(e.target.id==='tgHome') ui.tgHome='';
+  else ui.tgAway='';
+  ui.tgMsg='';
+});
 document.addEventListener('keydown',e=>{
   if(!ui.pcMode || ui.screen!=='card' || !ui.sel) return;
   const t=e.target;
@@ -2358,12 +2679,14 @@ async function init(){
       localStorage.removeItem('skittles.supabaseAnonKey');
     }catch(e){}
     session=kv.session||null; extra=kv.extraRoster||{};
+    tryoutNames=Array.isArray(kv.tryoutNames)?kv.tryoutNames.slice(0,40):[];
     if(kv.pcPrefs && typeof kv.pcPrefs==='object'){
       ui.pcMode=!!kv.pcPrefs.pcMode;
       ui.pcTheme=kv.pcPrefs.pcTheme==='light'?'light':'dark';
     }
     // Older sessions lack pin — Supabase sync needs a fresh login
-    if(session && !session.teamKey && session.div!=null) session.teamKey=teamKey(session.div,session.num);
+    if(session && session.tryout){ /* try-out hub; no team PIN */ }
+    else if(session && !session.teamKey && session.div!=null) session.teamKey=teamKey(session.div,session.num);
     cards=await idbAll('cards');
     Object.keys(cards).forEach(k=>{ normalizeCardFines(cards[k]); });
     const photos=await idbAll('photos');
@@ -2392,7 +2715,7 @@ async function init(){
   ui.screen = session ? 'fixtures' : 'login';
   render();
   flushLeagueSyncQueue();
-  if(session) loadNativeLeagueStats({quiet:true});
+  if(session && !session.tryout) loadNativeLeagueStats({quiet:true});
   if(supabaseEnabled()){
     pullSupabaseTeamData().then(()=>{ render(); flushSupabaseQueue(); }).catch(()=>{ render(); });
   }

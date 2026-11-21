@@ -78,6 +78,13 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .hero{border-left:6px solid var(--brass)}
 .hero .when{font-weight:700;color:var(--ink-soft)}
 .hero .vs{font:400 26px/1.2 'Rye',serif;margin:6px 0}
+.entry-pick-actions{display:flex;flex-direction:column;gap:0;margin-top:2px}
+.entry-pick-hint{margin:6px 0 12px;text-align:left}
+.entry-pick-vs{font:400 24px/1.25 'Rye',serif;margin:4px 0 8px}
+.entry-pick-card .entry-pick-hint{margin:8px 0 0}
+.slot-pick-row{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
+.slot-pick{min-width:44px;min-height:44px;padding:8px 12px;border-radius:8px;border:2px solid var(--line);background:var(--card);font-weight:700;font-size:18px}
+.slot-pick.on{background:var(--felt);color:var(--on-felt);border-color:var(--felt)}
 .tag{display:inline-block;font-weight:700;font-size:14px;padding:2px 10px;border-radius:12px;background:var(--felt);color:var(--on-felt);margin-right:6px}
 .frow{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:14px 4px;border-top:1px solid var(--line);width:100%;background:none;border-left:0;border-right:0;border-bottom:0;text-align:left}
 .frow:first-child{border-top:0}
@@ -140,6 +147,9 @@ select,input[type=text]{width:100%;min-height:56px;font-size:20px;padding:10px 1
 .boards{display:block}
 .board{display:none;background:var(--board);color:var(--chalk);border:6px solid var(--oak);border-radius:6px;padding:10px 8px 14px;margin-bottom:14px;font-family:'Patrick Hand','Comic Sans MS',cursive}
 .board.on{display:block}
+/* After-play scorecard: show the full card (both sides) like paper, even on phones */
+.boards.scorecard-boards .board{display:block}
+.tabs.scorecard-tabs{display:none}
 @media (min-width:860px){
   .boards{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
   .board{display:block}

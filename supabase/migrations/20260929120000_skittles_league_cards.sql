@@ -59,8 +59,9 @@ as $$
       end as away_players
     from public.match_cards c
     where coalesce(c.payload->>'quick', 'false') not in ('true', '1')
-      and c.card_key !~ '^(qm-|quick-)'
-      and coalesce(c.payload->>'key', '') !~ '^(qm-|quick-)'
+      and coalesce(c.payload->>'tryout', 'false') not in ('true', '1')
+      and c.card_key !~ '^(qm-|quick-|tg-)'
+      and coalesce(c.payload->>'key', '') !~ '^(qm-|quick-|tg-|tryout-)'
       and coalesce(nullif(c.payload->>'format', ''), 'league') = 'league'
   ),
   scored as (

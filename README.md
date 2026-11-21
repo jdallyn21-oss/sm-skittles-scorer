@@ -31,6 +31,19 @@ Each team has its own 4-digit PIN (from the league team-logins list). On the log
 
 Login short names (for example `COLT`, `FARM`) are stored in seed data with each PIN for reference; the UI uses the team dropdown + PIN.
 
+## Quick game try-out
+
+From the home (login) screen, **Start Quick game** opens a pins practice game with **no team PIN**. Choose 2–8 players a side, consecutive rubs **1** or **2** (South Molton default 2), name the sides, then the same **Mark scorecard** / **Score game** chooser. Type player names freely; recent names stay on the phone. Try-outs do **not** feed league tables or cloud sync. Use **Team login** to leave try-out mode.
+
+## Mark scorecard vs Score game
+
+On a fixture (and when starting a Quick Match / Cup or Quick game try-out), scorers choose how to enter scores:
+
+- **Mark scorecard** — fill the full card after play (tap any box, like paper). Both sides stay visible. Finish, chalkboard photo, captain signatures, PDF, and submit/sync use the same path as live scoring.
+- **Score game** — live score-as-you-go, rub by rub while they play (existing flow).
+
+League fixtures still feed league tables; Quick Matches / cups / try-outs do not. Team PIN only for real teams — no admin setup for scorers.
+
 ## Quick Match / Cup
 
 After login, **Quick Match / Cup** lets you score as your logged-in team against any opponent. Choose a **match format** first:
