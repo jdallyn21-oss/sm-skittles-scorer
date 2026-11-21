@@ -145,6 +145,8 @@ let syncUi = {pending:0, lastOk:null, lastErr:null, flushing:false};
 let sbUi = {pending:0, lastOk:null, lastErr:null, flushing:false, pulling:false, ready:false, setupNeeded:false};
 /** Live/bundled league scorelines keyed by fixture card key `div-week-mi` → {h,a,source}. */
 let leaguePlayedCache = {};
+/** Fixtures Joe cleared — hide scorelines until they score again (survives seed/cache refresh). */
+let clearedFixtureKeys = {};
 const ui = { screen:'loading', from:'login', cardKey:null, side:'home', sel:null, entry:'', fresh:true,
              sheet:null, sheetMsg:'', pin:'', pinMsg:'', tries:0, teamSel:'', newName:'', dupe:null, msg:'', updateReady:null, installEvt:null, reorder:null, reorderSel:null, moveSheet:null,
              qmSide:'home', qmOpp:'', qmMsg:'', qmFormat:'league',
@@ -260,13 +262,43 @@ function rebuildLeaguePlayedCache(resultsByDiv){
       const res=divMap[rk];
       if(!res||!Number.isFinite(res.homeTotal)||!Number.isFinite(res.awayTotal)) return;
       const key=div+'-'+m[1]+'-'+m[2];
+      if(clearedFixtureKeys[key]) return; // Cleared locally — stay "not played" until re-scored
       next[key]={h:res.homeTotal, a:res.awayTotal, source:res.source||'league'};
     });
   });
   leaguePlayedCache=next;
 }
+/** Drop scoreline overlays for a fixture so All fixtures shows Not started again. */
+function forgetFixtureResultCaches(key){
+  if(!key) return;
+  delete leaguePlayedCache[key];
+  if(SEED.played) delete SEED.played[key];
+  const parts=String(key).split('-').map(Number);
+  if(parts.length===3 && ui.leagueStats && Array.isArray(ui.leagueStats.results)){
+    const [div,week,mi]=parts;
+    const rk='w'+week+'m'+mi;
+    if(ui.leagueStats.results[div] && ui.leagueStats.results[div][rk]){
+      delete ui.leagueStats.results[div][rk];
+      try{
+        ui.leagueStats.total=ui.leagueStats.results.reduce((n,m)=>n+Object.keys(m||{}).length,0);
+      }catch(e){}
+    }
+  }
+}
+function markFixtureCleared(key){
+  if(!key || /^(qm-|quick-|tg-)/i.test(String(key))) return;
+  clearedFixtureKeys[key]=true;
+  forgetFixtureResultCaches(key);
+  kvSave('clearedFixtures', clearedFixtureKeys);
+}
+function unmarkFixtureCleared(key){
+  if(!key || !clearedFixtureKeys[key]) return;
+  delete clearedFixtureKeys[key];
+  kvSave('clearedFixtures', clearedFixtureKeys);
+}
 /** Best-known scoreline for a league fixture key: live/bundled cache, then SEED.played, then league stats map, then local submitted card. */
 function fixtureResultForKey(key){
+  if(clearedFixtureKeys[key]) return null;
   if(leaguePlayedCache[key]) return leaguePlayedCache[key];
   const seed=SEED.played&&SEED.played[key];
   if(seed && Number.isFinite(seed.h) && Number.isFinite(seed.a)) return {h:seed.h, a:seed.a, source:'seed'};
@@ -535,30 +567,51 @@ async function queueSupabaseCardDelete(cardKey){
     p_card_key:cardKey
   });
 }
+function fixtureLabelForKey(key){
+  const c=cards[key];
+  if(c) return sideName(c,'home')+' v '+sideName(c,'away');
+  if(session){
+    const f=fixturesFor(session.div,session.num).find(x=>x&&x.key===key&&!x.bye);
+    if(f) return teamName(session.div,f.home)+' v '+teamName(session.div,f.away);
+  }
+  return String(key);
+}
+function isLeagueFixtureKey(key){
+  const c=cards[key];
+  if(c) return shouldCloudSync(c);
+  return /^[0-2]-\d+-\d+$/.test(String(key));
+}
 /**
- * Wipe a match card on this phone. League fixtures also queue skittles_delete_card
- * so the row leaves Supabase / skittles_league_cards (league site /api/cards).
+ * Wipe a match card on this phone (draft / in progress / submitted).
+ * Also clears fixtures scoreline overlays. League fixtures queue skittles_delete_card
+ * so the row leaves Supabase / league site. Works even if only a stuck scoreline remains.
  */
 async function clearMatchCard(key){
-  const c=cards[key]; if(!c) return;
-  const league=shouldCloudSync(c);
-  const label=sideName(c,'home')+' v '+sideName(c,'away');
+  if(!key) return;
+  const c=cards[key];
+  const league=isLeagueFixtureKey(key);
+  const label=fixtureLabelForKey(key);
   const cloudNote=league
-    ? '\n\nThis also removes it from league sync so it no longer shows on the league site.'
+    ? '\n\nThis also removes it from league sync so it no longer shows on the league site or fixtures list.'
     : '\n\n(Not a league fixture — phone only.)';
-  if(!window.confirm('Clear this match card for '+label+'?'+cloudNote+'\n\nScores, photo, and signatures will be wiped. This cannot be undone.')) return;
+  if(!window.confirm('Clear this match for '+label+'?'+cloudNote+'\n\nScores, photo, signatures, and the fixtures scoreline will be wiped. This cannot be undone.')) return;
 
   await dropSbJobsForCard(key);
+  // Hide scoreline on All fixtures (seed / live cache / league-stats overlay)
+  if(league) markFixtureCleared(key);
+  else forgetFixtureResultCaches(key);
 
-  delete cards[key];
-  if(photoURLs[key]){ URL.revokeObjectURL(photoURLs[key]); delete photoURLs[key]; }
-  revokeSigURLs(key);
-  try{
-    await Promise.all([
-      idbDel('cards',key), idbDel('photos',key),
-      idbDel('sigs',sigStoreKey(key,'home')), idbDel('sigs',sigStoreKey(key,'away'))
-    ]);
-  }catch(e){ saveFailed(e); }
+  if(c){
+    delete cards[key];
+    if(photoURLs[key]){ URL.revokeObjectURL(photoURLs[key]); delete photoURLs[key]; }
+    revokeSigURLs(key);
+    try{
+      await Promise.all([
+        idbDel('cards',key), idbDel('photos',key),
+        idbDel('sigs',sigStoreKey(key,'home')), idbDel('sigs',sigStoreKey(key,'away'))
+      ]);
+    }catch(e){ saveFailed(e); }
+  }
 
   if(ui.cardKey===key || ui.entryPickKey===key){
     ui.cardKey=null; ui.sel=null; ui.sheet=null; ui.reorder=null; ui.reorderSel=null; ui.moveSheet=null;
@@ -571,12 +624,12 @@ async function clearMatchCard(key){
     return;
   }
   if(!supabaseEnabled()){
-    ui.msg='Card cleared on this phone. League cloud sync is off here — remove the row in Supabase if it still shows on the league site.';
+    ui.msg='Cleared on this phone and fixtures list. League cloud sync is off here — remove the row in Supabase if it still shows on the league site.';
     render();
     return;
   }
 
-  ui.msg='Card cleared on this phone. Removing from the league…';
+  ui.msg='Cleared on this phone and fixtures list. Removing from the league…';
   render();
   try{
     await queueSupabaseCardDelete(key);
@@ -584,14 +637,14 @@ async function clearMatchCard(key){
     const all=await idbAll('sbQueue');
     const del=all['delete::'+key];
     if(del&&del.status==='sent'){
-      ui.msg='Card cleared — removed from this phone and the league.';
+      ui.msg='Cleared — removed from this phone, fixtures list, and the league.';
     } else if(sbUi.lastErr){
-      ui.msg='Card cleared on this phone, but league remove failed ('+sbUi.lastErr+'). Run the delete-card SQL in Supabase, then try Clear again.';
+      ui.msg='Cleared on this phone and fixtures list, but league remove failed ('+sbUi.lastErr+'). Run the delete-card SQL in Supabase, then try Clear again.';
     } else {
-      ui.msg='Card cleared on this phone. League remove is waiting — open Fixtures when online to finish.';
+      ui.msg='Cleared on this phone and fixtures list. League remove is waiting — open Fixtures when online to finish.';
     }
   }catch(e){
-    ui.msg='Card cleared on this phone, but league remove failed. Try again when online, or run the delete-card SQL.';
+    ui.msg='Cleared on this phone and fixtures list, but league remove failed. Try again when online, or run the delete-card SQL.';
   }
   render();
 }
@@ -613,6 +666,8 @@ function persist(key){
     ensureScorecardMirrors(cards[key]);
     cards[key].savedAt=timeNow();
     cards[key].cloudDirty=true;
+    // Scoring again after Clear — let the fixtures list show the new result
+    if(cardHasAnyScores(cards[key]) || cards[key].status==='submitted') unmarkFixtureCleared(key);
     idbPut('cards',key,cards[key]).then(()=>{
       if(ui.msg.startsWith('This phone could not save')){ ui.msg=''; render(); }
       queueSupabaseCardUpsert(key).catch(()=>{});
@@ -960,13 +1015,25 @@ async function loadNativeLeagueStats(opts){
   const total=results.reduce((n,m)=>n+Object.keys(m).length,0);
   ui.leagueStats={results, total};
   ui.leagueStatsSource=sources.join('+')||'none';
+  // Drop cleared fixtures from the results map so Results/fixtures stay blank
+  try{
+    Object.keys(clearedFixtureKeys).forEach(key=>{
+      const parts=String(key).split('-').map(Number);
+      if(parts.length!==3) return;
+      const [div,week,mi]=parts;
+      const rk='w'+week+'m'+mi;
+      if(results[div] && results[div][rk]) delete results[div][rk];
+    });
+  }catch(e){}
   rebuildLeaguePlayedCache(results);
   // Keep SEED.played in sync so All fixtures sees the same totals as Results immediately
   try{
     Object.keys(leaguePlayedCache).forEach(k=>{
+      if(clearedFixtureKeys[k]) return;
       SEED.played=SEED.played||{};
       SEED.played[k]={h:leaguePlayedCache[k].h, a:leaguePlayedCache[k].a};
     });
+    Object.keys(clearedFixtureKeys).forEach(k=>{ if(SEED.played) delete SEED.played[k]; });
   }catch(e){}
   if(!total){
     ui.leagueStatsErr=liveErr==='offline'
@@ -1293,6 +1360,12 @@ async function applyRemoteCard(row){
   const localTs=local&&local.cloudUpdatedAt?Date.parse(local.cloudUpdatedAt):0;
   // Prefer remote unless local has unsynced edits newer than last cloud stamp
   if(local && local.cloudDirty && localTs && remoteTs && localTs>remoteTs) return;
+  // Another phone re-scored after we cleared — show it again
+  if(clearedFixtureKeys[key] && remote && (remote.status==='submitted' || cardHasAnyScores(remote))){
+    unmarkFixtureCleared(key);
+  }
+  // We cleared this fixture — do not resurrect the old remote row onto this phone
+  if(clearedFixtureKeys[key]) return;
   const merged=Object.assign({}, remote, {key, cloudUpdatedAt:row.updated_at||null, cloudDirty:false});
   cards[key]=merged;
   await idbPut('cards', key, merged);
@@ -2050,6 +2123,7 @@ function fixturesView(){
       <p class="muted small" style="margin:10px 0 14px">${home?'As the home team, you score this one. ':'The home team scores this one, but you can score it if they can\'t. '}Either team can make changes.</p>`;
     if(c && c.status==='submitted'){
       h+=`<button class="btn block" data-a="open" data-key="${nx.key}">View or change the card</button>`;
+      h+=`<button class="btn quiet block" data-a="clear-fixture" data-key="${nx.key}" style="margin-top:8px">Clear this card</button>`;
     } else if(needsPick){
       h+=`<div class="entry-pick-actions">
         <button class="btn block" data-a="open-mode" data-key="${nx.key}" data-mode="live">Score game</button>
@@ -2060,10 +2134,12 @@ function fixturesView(){
     } else {
       const modeLabel=isScorecardMode(c)?'Carry on marking scorecard':'Carry on scoring';
       h+=`<button class="btn block" data-a="open" data-key="${nx.key}">${modeLabel}</button>`;
+      h+=`<button class="btn quiet block" data-a="clear-fixture" data-key="${nx.key}" style="margin-top:8px">Clear this card</button>`;
     }
     h+='</div>';
   }
-  h+=`<div class="card"><b>All fixtures</b>`;
+  h+=`<div class="card"><b>All fixtures</b>
+    <p class="muted small" style="margin:6px 0 10px">Clear wipes an accidental or test game (and the scoreline on this list).</p>`;
   list.forEach(f=>{
     if(f.bye){ h+=`<div class="frow"><span>${fmtDate(f.date)} · Week ${f.week}</span><span class="muted">Bye</span></div>`; return; }
     const c=cards[f.key], home=f.home===n, opp=teamName(d,home?f.away:f.home);
@@ -2073,8 +2149,16 @@ function fixturesView(){
       st=fixtureResultHtml(f, played, n);
     } else if(c&&c.status==='submitted') st='<span class="state-wait">Submitted, waiting to send</span>';
     else if(c) st='<span class="state-wait">In progress</span>';
+    const showClear=!!(c || played);
     const inner=`<span><b>${fmtDate(f.date)}</b> · Week ${f.week}<br><span class="muted small">${home?'Home':'Away'} v ${esc(opp)}</span></span>${st}`;
-    h+=`<button class="frow" data-a="open" data-key="${f.key}">${inner}</button>`;
+    if(showClear){
+      h+=`<div class="qm-row">
+        <button class="frow qm-open" data-a="open" data-key="${f.key}">${inner}</button>
+        <button class="qm-del" data-a="clear-fixture" data-key="${f.key}" aria-label="Clear ${esc(opp)} fixture">Clear</button>
+      </div>`;
+    } else {
+      h+=`<button class="frow" data-a="open" data-key="${f.key}">${inner}</button>`;
+    }
   });
   return h+'</div></div>';
 }
@@ -2339,6 +2423,11 @@ function cardView(){
   if(!locked && isScorecardMode(c)){
     h+=`<div class="banner demo" role="status">Marking scorecard — one evening total per player. Use notes for specials like 27s. Set the line up before or as you fill. Finish, signatures, and submit work the same as live scoring.</div>`;
   }
+  // Clear available for in-progress (and submitted) — not buried under Finish
+  h+=`<div class="clear-card-bar">
+    <button type="button" class="btn quiet block" data-a="clear-card">Clear this card</button>
+    <p class="muted small" style="margin:6px 0 12px">Wrong, test, or opened by accident? Wipes this phone${shouldCloudSync(c)?' and removes it from the league / fixtures list':''}.</p>
+  </div>`;
   if(!locked && !cardHasAnyScores(c) && (c.entryMode==='live'||c.entryMode==='scorecard')){
     const other=isScorecardMode(c)?'live':'scorecard';
     const otherLabel=other==='scorecard'?'Mark scorecard':'Score game';
@@ -2773,6 +2862,13 @@ document.addEventListener('click',e=>{
         render();
       });
       break; }
+    case 'clear-fixture': {
+      const key=D.key; if(!key) break;
+      clearMatchCard(key).catch(err=>{
+        ui.msg=(err&&err.message)?err.message:'Could not clear the card.';
+        render();
+      });
+      break; }
     case 'open': {
       const f=fixturesFor(session.div,session.num).find(x=>x.key===D.key);
       if(!f||f.bye) break;
@@ -2947,6 +3043,8 @@ async function init(){
     }catch(e){}
     session=kv.session||null; extra=kv.extraRoster||{};
     tryoutNames=Array.isArray(kv.tryoutNames)?kv.tryoutNames.slice(0,40):[];
+    clearedFixtureKeys=(kv.clearedFixtures&&typeof kv.clearedFixtures==='object')?Object.assign({},kv.clearedFixtures):{};
+    Object.keys(clearedFixtureKeys).forEach(forgetFixtureResultCaches);
     if(kv.pcPrefs && typeof kv.pcPrefs==='object'){
       ui.pcMode=!!kv.pcPrefs.pcMode;
       ui.pcTheme=kv.pcPrefs.pcTheme==='light'?'light':'dark';

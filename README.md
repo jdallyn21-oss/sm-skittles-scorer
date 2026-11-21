@@ -37,13 +37,21 @@ From the home (login) screen, **Start Quick game** opens a pins practice game wi
 
 ## Clear a wrong or test card
 
-On any open match card (draft or submitted), tap **Clear this card** at the bottom of Finish the match, then confirm.
+**Clear** is available for in-progress and submitted games:
 
-- Wipes scores, photo, and signatures **on this phone**.
-- For **league fixtures**, also calls Supabase `skittles_delete_card` so the match leaves shared sync and the league site (`skittles_league_cards` / `/api/cards`).
-- Quick Match / try-out: phone only (same as Delete on the fixtures list).
+1. On the open card — **Clear this card** near the top (also under Finish).
+2. On **All fixtures** — **Clear** beside any In progress / scored row.
+3. On the Next match hero when a card is already open — **Clear this card**.
 
-Maintainer: run `supabase/migrations/20261121190000_skittles_delete_card.sql` in the Supabase SQL editor once. Until that RPC exists, Clear still wipes the phone; league remove will fail with a message until the SQL is applied. To force-remove a stuck row now:
+Confirm the dialog. That:
+
+- Wipes scores, photo, and signatures **on this phone**
+- Clears the **fixtures list scoreline** (seed / live cache / league-stats overlay)
+- For **league fixtures**, calls Supabase `skittles_delete_card` so the match leaves the league site
+
+Quick Match / try-out: use **Delete** on the fixtures list (phone only).
+
+Maintainer: run `supabase/migrations/20261121190000_skittles_delete_card.sql` in the Supabase SQL editor once. Until that RPC exists, Clear still wipes the phone and fixtures list; league remove will fail with a message until the SQL is applied. To force-remove a stuck row now:
 
 ```sql
 select card_key, payload->>'status', updated_at from public.match_cards order by updated_at desc;
