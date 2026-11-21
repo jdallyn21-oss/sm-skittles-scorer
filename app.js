@@ -1777,11 +1777,10 @@ function sessionTopNav(active){
     </div>`;
   }
   const {div:d,num:n}=session;
-  const onStats=active==='league-stats';
   return `<div class="session-top">
     <div class="session-top-team"><h2 style="margin:0">${esc(teamName(d,n))}</h2><span class="muted small">Division ${d+1}</span></div>
     <div class="session-top-nav" role="navigation" aria-label="Account">
-      <button type="button" class="navtab ${onStats?'on':''}" data-a="league-stats" aria-current="${onStats?'page':'false'}">League stats</button>
+      <a class="navtab" href="${esc(leagueSiteUrl())}" target="_blank" rel="noopener noreferrer">League stats</a>
       <button type="button" class="back" data-a="logout">Log out</button>
     </div>
   </div>`;
@@ -2510,14 +2509,11 @@ document.addEventListener('click',e=>{
     case 'quick':
       if(isTryoutSession()) break;
       ui.qmSide='home'; ui.qmOpp=''; ui.qmMsg=''; ui.qmFormat=ui.qmFormat||'league'; ui.screen='quick'; render(); window.scrollTo(0,0); break;
-    case 'league-stats':
+    case 'league-stats': {
+      // Fallback if an old cached shell still uses data-a — open the live league site
       if(isTryoutSession()) break;
-      ui.screen='league-stats';
-      ui.leagueTab=(ui.leagueTab==='results'||ui.leagueTab==='averages')?ui.leagueTab:'table';
-      if(ui.leagueDiv==null && session) ui.leagueDiv=session.div;
-      render(); window.scrollTo(0,0);
-      loadNativeLeagueStats();
-      break;
+      try{ window.open(leagueSiteUrl(), '_blank', 'noopener,noreferrer'); }catch(e){}
+      break; }
     case 'league-tab': {
       const next=D.tab==='results'?'results':(D.tab==='averages'?'averages':'table');
       ui.leagueTab=next; render();

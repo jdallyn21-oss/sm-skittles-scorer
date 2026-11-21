@@ -79,14 +79,9 @@ Scorers only enter a **team PIN**. Backend config is maintainer-only:
 - **Or** paste the anon key into committed `config.js` (never `service_role` / DB password)
 - Run SQL in `supabase/migrations/` then `supabase/seed_teams.sql` in the Supabase SQL editor (Joe only)
 
-## League stats (in-app)
+## League stats
 
-After login, **League stats** sits next to **Log out** in the top nav. Native tables, results and averages (no iframe, no dump).
-
-- Data: bundled season results + live `GET {leagueBaseUrl}/api/cards` / Supabase `skittles_league_cards` when online
-- Division switcher · Table · Results · Averages · Refresh
-- Offline: bundled/seed results still show; scoring unchanged
-- Scorer: [https://skittlesscorer.vercel.app/](https://skittlesscorer.vercel.app/) · League site (separate): [https://smskittles.vercel.app/](https://smskittles.vercel.app/)
+After login, **League stats** (next to **Log out**) opens the league website in a new browser tab: [https://smskittles.vercel.app/](https://smskittles.vercel.app/). Scorer: [https://skittlesscorer.vercel.app/](https://skittlesscorer.vercel.app/).
 
 ## League site sync (optional, after Supabase)
 
