@@ -1864,10 +1864,10 @@ function fixturesView(){
       h+=`<button class="btn block" data-a="open" data-key="${nx.key}">View or change the card</button>`;
     } else if(needsPick){
       h+=`<div class="entry-pick-actions">
-        <button class="btn block" data-a="open-mode" data-key="${nx.key}" data-mode="scorecard">Mark scorecard</button>
-        <p class="muted small entry-pick-hint">Fill the card after the match — like paper.</p>
-        <button class="btn quiet block" data-a="open-mode" data-key="${nx.key}" data-mode="live">Score game</button>
+        <button class="btn block" data-a="open-mode" data-key="${nx.key}" data-mode="live">Score game</button>
         <p class="muted small entry-pick-hint">Score live as you go, rub by rub.</p>
+        <button class="btn quiet block" data-a="open-mode" data-key="${nx.key}" data-mode="scorecard">Mark scorecard</button>
+        <p class="muted small entry-pick-hint">Fill the card after the match — like paper.</p>
       </div>`;
     } else {
       const modeLabel=isScorecardMode(c)?'Carry on marking scorecard':'Carry on scoring';
@@ -1908,10 +1908,10 @@ function entryPickView(){
     <p class="entry-pick-vs">${esc(hn)} v ${esc(an)}</p>
     <p class="muted" style="margin:0 0 16px">How do you want to enter the scores?</p>
     <div class="card entry-pick-card">
-      <button class="btn block" data-a="pick-mode" data-mode="scorecard">Mark scorecard</button>
-      <p class="muted small entry-pick-hint">Fill every box after play — like a paper card — then finish and submit as usual.</p>
-      <button class="btn quiet block" data-a="pick-mode" data-mode="live" style="margin-top:14px">Score game</button>
+      <button class="btn block" data-a="pick-mode" data-mode="live">Score game</button>
       <p class="muted small entry-pick-hint">Score live as you go, rub by rub while they play.</p>
+      <button class="btn quiet block" data-a="pick-mode" data-mode="scorecard" style="margin-top:14px">Mark scorecard</button>
+      <p class="muted small entry-pick-hint">Fill every box after play — like a paper card — then finish and submit as usual.</p>
     </div>
   </div>`;
 }
